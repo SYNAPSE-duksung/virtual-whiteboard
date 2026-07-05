@@ -13,6 +13,10 @@ py -3.11 -m venv venv
 #bash
 source venv/Scripts/Activate
 
+# macOS / Linux
+python3.11 -m venv venv
+source venv/bin/activate
+
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
