@@ -21,6 +21,18 @@ python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
+## 드로잉 데모 실행
+
+```powershell
+# OpenCV 창 버전
+python -m controller.main
+
+# PyQt 앱 버전
+python -m ui.app
+```
+
+`SPACE`(또는 PyQt의 펜 버튼)로 펜을 올리고 내리며, `C` 지우기, `S`는 흰 배경 캔버스를 `captures/`에 PNG로 저장합니다. 카메라가 책상을 내려다보는 구도를 전제로 반전 없이 표시하며, 셀피 구도로 테스트하려면 `--mirror`를 붙입니다.
+
 ## 샘플 실행
 
 ```powershell
