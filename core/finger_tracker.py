@@ -1,83 +1,22 @@
+"""검지(8번) 실시간 좌표 추적 + One Euro 필터 + 자동 pen 판정 + CSV 수집 (D파트 학습 데이터).
+
+CV 로직은 core 모듈(`HandTracker`, `FingertipSmoother`, `PenStateDetector`,
+`compute_pen_ratio`, `is_open_hand`)을 재사용하고, 이 스크립트는 카메라 루프·시각화·CSV
+기록 등 애플리케이션 관심사만 담당한다. 판정 로직은 controller/main.py와 동일한 구현을 공유.
+
+실행: `python -m core.finger_tracker` (옵션: --camera, --min-cutoff, --beta,
+--pen-down-thresh, --pen-up-thresh, --output-dir, --no-record)
+"""
+
 import argparse
-import csv
-import math
-import os
 import time
-from datetime import datetime
 
 import cv2
-import mediapipe as mp
 
-# ----------------------------------------------------------------------------
-# One Euro Filter (Casiez et al., 2012) - 실시간 좌표 스무딩용 저지연 필터
-# ----------------------------------------------------------------------------
-def _smoothing_factor(t_e, cutoff):
-    r = 2 * math.pi * cutoff * t_e
-    return r / (r + 1)
-
-
-def _exponential_smoothing(a, x, x_prev):
-    return a * x + (1 - a) * x_prev
-
-
-class OneEuroFilter:
-    """1차원 One Euro Filter. x, y 좌표에 각각 하나씩 사용."""
-
-    def __init__(self, t0, x0, dx0=0.0, min_cutoff=1.0, beta=0.0, d_cutoff=1.0):
-        self.min_cutoff = float(min_cutoff)
-        self.beta = float(beta)
-        self.d_cutoff = float(d_cutoff)
-        self.x_prev = float(x0)
-        self.dx_prev = float(dx0)
-        self.t_prev = float(t0)
-
-    def __call__(self, t, x):
-        t_e = t - self.t_prev
-        if t_e <= 0:
-            t_e = 1e-3  # 동일 타임스탬프 방지
-
-        a_d = _smoothing_factor(t_e, self.d_cutoff)
-        dx = (x - self.x_prev) / t_e
-        dx_hat = _exponential_smoothing(a_d, dx, self.dx_prev)
-
-        cutoff = self.min_cutoff + self.beta * abs(dx_hat)
-        a = _smoothing_factor(t_e, cutoff)
-        x_hat = _exponential_smoothing(a, x, self.x_prev)
-
-        self.x_prev, self.dx_prev, self.t_prev = x_hat, dx_hat, t
-        return x_hat
-
-
-# ----------------------------------------------------------------------------
-# MediaPipe landmark index 상수
-# ----------------------------------------------------------------------------
-WRIST = 0
-INDEX_DIP = 7
-INDEX_TIP = 8
-MIDDLE_MCP = 9
-# 지우기 제스처 판정용 (끝 landmark, PIP landmark) 쌍
-FINGER_TIP_PIP_PAIRS = [(8, 6), (12, 10), (16, 14), (20, 18)]
-
-
-def compute_pen_ratio(landmarks, w, h):
-    """검지 Tip-DIP의 y좌표 차이를 손 크기(wrist-middle_mcp 거리)로 정규화.
-    값이 작을수록 손가락이 눌린(pen-down) 상태로 판단."""
-    tip = landmarks[INDEX_TIP]
-    dip = landmarks[INDEX_DIP]
-    wrist = landmarks[WRIST]
-    mid_mcp = landmarks[MIDDLE_MCP]
-
-    hand_size = math.hypot((wrist.x - mid_mcp.x) * w, (wrist.y - mid_mcp.y) * h)
-    if hand_size < 1e-6:
-        return 1.0
-
-    y_diff = abs((tip.y - dip.y) * h)
-    return y_diff / hand_size
-
-
-def is_open_hand(landmarks):
-    """4손가락 끝이 모두 PIP보다 위(y가 작음)에 있으면 손을 편 것으로 간주 (지우기 제스처)."""
-    return all(landmarks[tip].y < landmarks[pip].y for tip, pip in FINGER_TIP_PIP_PAIRS)
+from core.filters import FingertipSmoother
+from core.pen_state import INDEX_TIP, PenStateDetector, compute_pen_ratio, is_open_hand
+from core.recorder import CoordRecorder, CoordSample
+from core.tracker import HandTracker
 
 
 def main():
@@ -93,15 +32,10 @@ def main():
     parser.add_argument("--no-record", action="store_true", help="시작 시 CSV 기록을 켜지 않음 ('r'로 직접 시작)")
     args = parser.parse_args()
 
-    os.makedirs(args.output_dir, exist_ok=True)
-
-    mp_hands = mp.solutions.hands
-    hands = mp_hands.Hands(
-        static_image_mode=False,
-        max_num_hands=1,
-        min_detection_confidence=0.7,
-        min_tracking_confidence=0.6,
-    )
+    tracker = HandTracker(max_num_hands=1, min_detection_confidence=0.7, min_tracking_confidence=0.6)
+    smoother = FingertipSmoother(min_cutoff=args.min_cutoff, beta=args.beta)
+    pen_state = PenStateDetector(down_thresh=args.pen_down_thresh, up_thresh=args.pen_up_thresh)
+    recorder = CoordRecorder(args.output_dir)
 
     cap = cv2.VideoCapture(args.camera)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, args.width)
@@ -112,35 +46,13 @@ def main():
     ret, frame = cap.read()
     if not ret:
         raise RuntimeError("첫 프레임을 읽지 못했습니다. 카메라 연결을 확인하세요.")
-    h, w = frame.shape[:2]
     canvas = None  # 필요 시 첫 프레임에서 초기화
 
-    filter_x = filter_y = None  # 손이 처음 감지될 때 생성
     prev_point = None
-    pen_down = False
+    frame_count = 0
 
-    frame_id = 0
-    csv_writer = None
-    csv_file = None
-    recording = not args.no_record
-
-    def start_new_csv():
-        nonlocal csv_writer, csv_file
-        if csv_file is not None:
-            csv_file.close()
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        path = os.path.join(args.output_dir, f"coords_{ts}.csv")
-        csv_file = open(path, "w", newline="", encoding="utf-8")
-        csv_writer = csv.writer(csv_file)
-        csv_writer.writerow(
-            ["frame_id", "timestamp", "hand_detected", "raw_x", "raw_y", "raw_z",
-             "filtered_x", "filtered_y", "pen_ratio", "pen_down"]
-        )
-        print(f"[CSV] 기록 시작: {path}")
-        return path
-
-    if recording:
-        start_new_csv()
+    if not args.no_record:
+        print(f"[CSV] 기록 시작: {recorder.start()}")
 
     print("q: 종료 | r: 기록 on/off | c: 캔버스 지우기 | 손 펴기: 캔버스 지우기 제스처")
 
@@ -153,79 +65,65 @@ def main():
             if canvas is None:
                 canvas = frame.copy() * 0
 
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            result = hands.process(rgb)
+            h, w = frame.shape[:2]
+            hands = tracker.process(frame)
 
             now = time.time()
             hand_detected = False
             raw_x = raw_y = raw_z = None
             fx = fy = None
             pen_ratio = None
+            pen_down = False
 
-            if result.multi_hand_landmarks:
+            if hands:
                 hand_detected = True
-                landmarks = result.multi_hand_landmarks[0].landmark
-                tip = landmarks[INDEX_TIP]
+                lm = hands[0].normalized_landmarks
+                raw_x, raw_y, raw_z = lm[INDEX_TIP][0] * w, lm[INDEX_TIP][1] * h, lm[INDEX_TIP][2]
 
-                raw_x, raw_y, raw_z = tip.x * w, tip.y * h, tip.z
-
-                if filter_x is None:
-                    filter_x = OneEuroFilter(now, raw_x, min_cutoff=args.min_cutoff, beta=args.beta)
-                    filter_y = OneEuroFilter(now, raw_y, min_cutoff=args.min_cutoff, beta=args.beta)
-                    fx, fy = raw_x, raw_y
-                else:
-                    fx = filter_x(now, raw_x)
-                    fy = filter_y(now, raw_y)
-
-                pen_ratio = compute_pen_ratio(landmarks, w, h)
-                # 히스테리시스: down 진입은 낮은 임계값, up 복귀는 높은 임계값
-                if pen_down:
-                    pen_down = pen_ratio < args.pen_up_thresh
-                else:
-                    pen_down = pen_ratio < args.pen_down_thresh
-
+                fx, fy = smoother.update(now, raw_x, raw_y)
+                pen_ratio = compute_pen_ratio(lm, w, h)
                 point = (int(fx), int(fy))
 
-                if is_open_hand(landmarks):
+                if is_open_hand(lm):
                     canvas[:] = 0
                     prev_point = None
+                    pen_state.reset()
                     pen_down = False
                 else:
+                    pen_down = pen_state.update(pen_ratio)
                     if pen_down and prev_point is not None:
                         cv2.line(canvas, prev_point, point, (0, 0, 255), 4, cv2.LINE_AA)
                     prev_point = point if pen_down else None
 
-                # 시각화: 랜드마크 + pen 상태
+                # 시각화: 랜드마크 점 + pen 상태
                 color = (0, 0, 255) if pen_down else (0, 255, 0)
                 cv2.circle(frame, point, 8, color, -1)
-                mp.solutions.drawing_utils.draw_landmarks(
-                    frame, result.multi_hand_landmarks[0], mp_hands.HAND_CONNECTIONS
-                )
+                for px, py in hands[0].pixel_landmarks:
+                    cv2.circle(frame, (int(px), int(py)), 2, (0, 255, 0), -1)
             else:
+                smoother.reset()
+                pen_state.reset()
                 prev_point = None
                 pen_down = False
 
-            if recording and csv_writer is not None:
-                csv_writer.writerow([
-                    frame_id,
-                    f"{now:.6f}",
-                    int(hand_detected),
-                    f"{raw_x:.2f}" if raw_x is not None else "",
-                    f"{raw_y:.2f}" if raw_y is not None else "",
-                    f"{raw_z:.5f}" if raw_z is not None else "",
-                    f"{fx:.2f}" if fx is not None else "",
-                    f"{fy:.2f}" if fy is not None else "",
-                    f"{pen_ratio:.4f}" if pen_ratio is not None else "",
-                    int(pen_down),
-                ])
-                if frame_id % 30 == 0:
-                    csv_file.flush()
-
-            frame_id += 1
+            recorder.write(
+                CoordSample(
+                    hand_detected=hand_detected,
+                    raw_x=raw_x,
+                    raw_y=raw_y,
+                    raw_z=raw_z,
+                    filtered_x=fx,
+                    filtered_y=fy,
+                    pen_ratio=pen_ratio,
+                    pen_down=pen_down,
+                ),
+                timestamp=now,
+            )
+            frame_count += 1
 
             combined = cv2.addWeighted(frame, 1.0, canvas, 1.0, 0)
-            status = f"REC" if recording else "PAUSED"
-            cv2.putText(combined, f"[{status}] frame={frame_id}", (10, 30),
+            status = "REC" if recorder.recording else "PAUSED"
+            cv2.putText(combined, f"[{status}] frame={frame_count}", (10, 30),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
             cv2.imshow("SYNAPSE - Finger Tracker MVP", combined)
 
@@ -233,9 +131,8 @@ def main():
             if key == ord("q"):
                 break
             elif key == ord("r"):
-                recording = not recording
-                if recording:
-                    start_new_csv()
+                if recorder.toggle():
+                    print(f"[CSV] 기록 시작: {recorder.path}")
                 else:
                     print("[CSV] 기록 일시정지")
             elif key == ord("c"):
@@ -244,9 +141,9 @@ def main():
     finally:
         cap.release()
         cv2.destroyAllWindows()
-        hands.close()
-        if csv_file is not None:
-            csv_file.close()
+        tracker.close()
+        if recorder.recording:
+            recorder.close()
             print("[CSV] 파일 저장 완료")
 
 
