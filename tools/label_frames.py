@@ -22,23 +22,40 @@
 frames.csv가 없으면 측면 영상의 프레임 번호를 그대로 전역 frame_index로 간주한다
 (상태바에 경고 표시).
 
+카메라 지연 오프셋 보정
+------------------------
+측면 카메라(폰, Iriun 경유)는 파이프라인 지연 때문에 같은 frame_index에 기록된 메인
+프레임보다 과거 장면을 담는다. 이를 보정하기 위해 토글 지점은 항상 **측면 영상 프레임
+인덱스 k 공간**으로 내부 보관한다(라벨러가 "본 순간"에 앵커되어, 오프셋을 나중에 바꿔도
+이미 찍은 토글이 오염되지 않는다). "지연 오프셋(프레임)" 스핀박스로 지연 프레임 수를
+지정하면, 측면 프레임 k는 ``g = side_map[k] - offset``으로 보정된 전역 frame_index에
+대응한다고 간주해 메인 미니뷰와 저장 라벨을 계산한다. 저장 시에만 k 공간 토글을
+``side_toggles_to_global``로 전역 공간으로 변환해 ``expand_labels``에 넘긴다. 오프셋 값은
+영상과 같은 폴더의 ``labeling_offsets.json``에 ``{base: offset}`` 형태로 저장되어, 다음에
+같은 영상을 열 때 자동 복원된다.
+
 출력
 -----
 ``{base}_labels.csv`` (영상과 같은 폴더, 헤더 ``video_id,frame_id,pen_down``) — 전역
 프레임마다 한 행. D파트가 ``{base}_coords.csv``와 ``video_id`` + ``frame_id``로 조인한다.
 기존 라벨 파일이 있으면 로드해 토글 지점을 복원한 뒤 이어서 편집할 수 있다.
+``labeling_offsets.json`` (같은 폴더, 여러 영상이 공유하는 사이드카) — ``{base: offset}``
+매핑. 저장할 때마다 현재 base의 오프셋 값이 갱신되고, 다른 base 항목은 보존된다.
 
 mediapipe는 필요하지 않다 (이미 녹화된 영상 + CSV만 다룬다).
 
 실행: python -m tools.label_frames
 조작: SPACE 재생/정지 · ←/→ 1프레임(Shift+←/→ 10프레임) · T 토글 마크 ·
-      Ctrl+Z 마지막 토글 취소 · Ctrl+S 저장
+      Ctrl+Z 마지막 토글 취소 · Ctrl+S 저장 ·
+      "지연 오프셋(프레임)" 스핀박스(-30~30) — 박수 등 동기화 순간을 찾은 뒤 좌측 메인
+      화면이 같은 순간을 보일 때까지 값을 조절해 측면 카메라 지연을 보정한다
 """
 
 from __future__ import annotations
 
 import bisect
 import csv
+import json
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -58,6 +75,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QSlider,
+    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
@@ -67,9 +85,12 @@ SIDE_SUFFIX = "_side.mp4"
 MAIN_SUFFIX = "_main.mp4"
 FRAMES_SUFFIX = "_frames.csv"
 LABELS_SUFFIX = "_labels.csv"
+OFFSETS_FILENAME = "labeling_offsets.json"
 
 _DEFAULT_FPS = 30.0
 _SPEED_OPTIONS = ("0.5x", "1x", "2x")
+_OFFSET_MIN = -30
+_OFFSET_MAX = 30
 
 
 # --------------------------------------------------------------------------
@@ -213,11 +234,15 @@ def down_regions(toggles: list[int], total: int) -> list[tuple[int, int]]:
     return regions
 
 
-def format_toggle_label(order_index: int, frame: int) -> str:
-    """토글 지점 목록 UI 항목 문자열(``프레임 132: UP→DOWN``)을 만든다."""
+def format_toggle_label(order_index: int, k: int, g: int) -> str:
+    """토글 지점 목록 UI 항목 문자열(``측면 프레임 k (전역 g): UP→DOWN``)을 만든다.
+
+    k는 측면 영상 프레임 번호(내부 보관 공간), g는 지연 오프셋을 적용해 보정한
+    전역 frame_index(저장 시 실제로 쓰이는 값)다.
+    """
     before = "UP" if order_index % 2 == 0 else "DOWN"
     after = "DOWN" if order_index % 2 == 0 else "UP"
-    return f"프레임 {frame}: {before}→{after}"
+    return f"측면 프레임 {k} (전역 {g}): {before}→{after}"
 
 
 def write_labels_csv(path: Path, video_id: str, labels: list[int]) -> None:
@@ -255,6 +280,84 @@ def read_labels_csv(path: Path) -> tuple[str, list[int]]:
     return video_id, labels
 
 
+def side_toggles_to_global(
+    toggles_k: list[int], side_map: list[int], offset: int, total: int
+) -> list[int]:
+    """측면 공간 토글 k 목록을 저장용 전역 frame_index 목록으로 변환한다.
+
+    각 k에 대해 ``g = side_map[k] - offset``을 계산해 ``[0, total - 1]`` 범위로
+    클램프한다. side_map 범위 밖의 k는 무시한다. 클램프로 인해 서로 다른 k가 같은 g로
+    겹치면 정렬 후 중복 제거해 병합한다.
+    """
+    if total <= 0:
+        return []
+    n = len(side_map)
+    result: set[int] = set()
+    for k in toggles_k:
+        if k < 0 or k >= n:
+            continue
+        g = side_map[k] - offset
+        g = max(0, min(g, total - 1))
+        result.add(g)
+    return sorted(result)
+
+
+def global_toggles_to_side(toggles_g: list[int], side_map: list[int], offset: int) -> list[int]:
+    """전역 토글 목록을 측면 공간 k 목록으로 역변환한다 (기존 라벨 이어서 편집할 때 사용).
+
+    각 g에 대해 ``side_map[k] ≈ g + offset``을 만족하는 k를 이분탐색으로 가장 가까운
+    값에서 찾는다. ``side_toggles_to_global``의 근사 역연산이며, 클램프가 걸리지 않은
+    범위에서는 정확히 원래 k로 복원된다.
+    """
+    if not side_map:
+        return []
+    n = len(side_map)
+    result: set[int] = set()
+    for g in toggles_g:
+        target = g + offset
+        pos = bisect.bisect_left(side_map, target)
+        candidates = [idx for idx in (pos - 1, pos) if 0 <= idx < n]
+        if not candidates:
+            continue
+        best = min(candidates, key=lambda idx: abs(side_map[idx] - target))
+        result.add(best)
+    return sorted(result)
+
+
+def load_labeling_offsets(path: Path) -> dict[str, int]:
+    """``labeling_offsets.json`` 사이드카를 읽어 ``{base: offset}`` 딕셔너리를 돌려준다.
+
+    파일이 없거나 JSON 파싱에 실패하면(손상된 파일 포함) 빈 딕셔너리로 폴백한다.
+    """
+    if not path.exists():
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    result: dict[str, int] = {}
+    for key, value in data.items():
+        try:
+            result[str(key)] = int(value)
+        except (TypeError, ValueError):
+            continue
+    return result
+
+
+def save_labeling_offset(path: Path, base: str, offset: int) -> None:
+    """``labeling_offsets.json``에 ``base``의 오프셋 값을 기록한다.
+
+    기존 파일의 다른 base 항목은 보존한 채 병합 저장한다.
+    """
+    data = load_labeling_offsets(path)
+    data[base] = int(offset)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2, sort_keys=True)
+
+
 # --------------------------------------------------------------------------
 # GUI
 # --------------------------------------------------------------------------
@@ -272,23 +375,23 @@ def _to_pixmap(bgr_frame, target: QLabel) -> QPixmap:
 
 
 class TimelineWidget(QWidget):
-    """pen-down 구간을 빨간 띠로, 현재 위치를 세로선으로 그리는 하단 타임라인."""
+    """pen-down 구간을 빨간 띠로, 현재 위치를 세로선으로 그리는 하단 타임라인.
+
+    모든 좌표는 측면 영상 프레임 인덱스(k) 공간 기준이다(토글 목록도, 현재 위치도).
+    전역 frame_index로의 변환은 저장 시에만 일어나므로 이 위젯은 신경 쓰지 않는다.
+    """
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setMinimumHeight(28)
-        self._side_map: list[int] = []
-        self._toggles: list[int] = []
-        self._total_frames: int = 0
+        self._toggles_k: list[int] = []
+        self._total_k: int = 0
         self._current_k: int = 0
         self.on_seek: Callable[[int], None] | None = None
 
-    def set_data(
-        self, side_map: list[int], toggles: list[int], total_frames: int, current_k: int
-    ) -> None:
-        self._side_map = side_map
-        self._toggles = toggles
-        self._total_frames = total_frames
+    def set_data(self, toggles_k: list[int], total_k: int, current_k: int) -> None:
+        self._toggles_k = toggles_k
+        self._total_k = total_k
         self._current_k = current_k
         self.update()
 
@@ -296,13 +399,11 @@ class TimelineWidget(QWidget):
         painter = QPainter(self)
         width, height = self.width(), self.height()
         painter.fillRect(0, 0, width, height, QColor(60, 60, 60))
-        n = len(self._side_map)
+        n = self._total_k
         if n > 0:
-            for start_g, end_g in down_regions(self._toggles, self._total_frames):
-                x0 = global_to_side_index(self._side_map, start_g)
-                x1 = n if end_g >= self._total_frames else global_to_side_index(self._side_map, end_g)
-                px0 = int(x0 / n * width)
-                px1 = int(x1 / n * width)
+            for start_k, end_k in down_regions(self._toggles_k, n):
+                px0 = int(start_k / n * width)
+                px1 = int(end_k / n * width)
                 painter.fillRect(px0, 0, max(px1 - px0, 1), height, QColor(210, 40, 40))
             cx = int(self._current_k / (n - 1) * width) if n > 1 else 0
             painter.setPen(QColor(255, 220, 0))
@@ -310,7 +411,7 @@ class TimelineWidget(QWidget):
         painter.end()
 
     def mousePressEvent(self, event) -> None:  # noqa: N802 (Qt naming)
-        n = len(self._side_map)
+        n = self._total_k
         if n <= 1 or self.on_seek is None:
             return
         ratio = max(0.0, min(1.0, event.position().x() / max(self.width(), 1)))
@@ -370,11 +471,25 @@ class LabelWindow(QMainWindow):
         edit_buttons.addWidget(minus_button)
         edit_buttons.addWidget(plus_button)
 
+        self._offset_spin = QSpinBox()
+        self._offset_spin.setRange(_OFFSET_MIN, _OFFSET_MAX)
+        self._offset_spin.setValue(0)
+        self._offset_spin.setToolTip(
+            "측면 영상이 메인보다 늦게 도착한 프레임 수. 박수 순간을 슬라이더로 찾은 뒤, "
+            "좌측 메인 화면이 같은 순간을 보일 때까지 이 값을 조절하세요."
+        )
+        self._offset_spin.valueChanged.connect(self._on_offset_changed)
+        offset_row = QHBoxLayout()
+        offset_row.addWidget(QLabel("지연 오프셋(프레임)"))
+        offset_row.addWidget(self._offset_spin)
+        offset_row.addStretch(1)
+
         self._label_file_display = QLabel("라벨 파일: -")
 
         left_col = QVBoxLayout()
         left_col.addWidget(QLabel("메인 (사선) - 문맥 확인용"))
         left_col.addWidget(self._main_view)
+        left_col.addLayout(offset_row)
         left_col.addWidget(QLabel("토글 지점"))
         left_col.addWidget(self._toggle_list, stretch=1)
         left_col.addLayout(edit_buttons)
@@ -527,7 +642,16 @@ class LabelWindow(QMainWindow):
                 main_cap.release()
                 self._main_view.setText("메인 영상 없음 (열기 실패)")
 
+        offsets_path = folder / OFFSETS_FILENAME
+        offsets = load_labeling_offsets(offsets_path)
+        offset_known = base in offsets
+        offset = offsets.get(base, 0)
+        self._offset_spin.blockSignals(True)
+        self._offset_spin.setValue(offset)
+        self._offset_spin.blockSignals(False)
+
         self._labels_path = folder / f"{base}{LABELS_SUFFIX}"
+        offset_note = ""
         if self._labels_path.exists():
             _video_id, labels = read_labels_csv(self._labels_path)
             if labels and len(labels) != self._total_frames:
@@ -536,7 +660,10 @@ class LabelWindow(QMainWindow):
                     f"({self._total_frames})와 다릅니다. 더 큰 쪽을 기준으로 이어서 편집합니다"
                 )
                 self._total_frames = max(self._total_frames, len(labels))
-            self._toggles = toggles_from_labels(labels)
+            toggles_g = toggles_from_labels(labels)
+            self._toggles = global_toggles_to_side(toggles_g, self._side_map, offset)
+            if not offset_known and toggles_g:
+                offset_note = " (labeling_offsets.json에 오프셋 기록 없음 — 0으로 간주)"
         else:
             self._toggles = []
         self._undo_stack = []
@@ -550,18 +677,26 @@ class LabelWindow(QMainWindow):
             self._seek(0)
 
         note = "" if maps.has_frames_csv else " (frames.csv 없음 — 측면 프레임 번호를 그대로 전역 인덱스로 사용)"
-        self.statusBar().showMessage(f"{path.name} 로드 완료{note}")
+        self.statusBar().showMessage(f"{path.name} 로드 완료{note}{offset_note}")
 
     # --- 프레임 탐색 / 표시 ---
 
-    def _current_global_frame(self) -> int:
+    def _corrected_global_for_k(self, k: int) -> int:
+        """측면 프레임 k를 지연 오프셋으로 보정한 전역 frame_index로 변환한다.
+
+        ``g = side_map[k] - offset``를 ``[0, total_frames - 1]`` 범위로 클램프한다.
+        """
         if not self._side_map:
-            return 0
-        return self._side_map[self._current_k]
+            return k
+        k = max(0, min(k, len(self._side_map) - 1))
+        g = self._side_map[k] - self._offset_spin.value()
+        return max(0, min(g, max(self._total_frames - 1, 0)))
+
+    def _current_corrected_global(self) -> int:
+        return self._corrected_global_for_k(self._current_k)
 
     def _current_pen_down(self) -> bool:
-        g = self._current_global_frame()
-        return bool(bisect.bisect_right(sorted(self._toggles), g) % 2)
+        return bool(bisect.bisect_right(sorted(self._toggles), self._current_k) % 2)
 
     def _seek(self, k: int) -> None:
         if self._side_cap is None or not self._side_map:
@@ -577,7 +712,7 @@ class LabelWindow(QMainWindow):
         self._render_main_frame()
         self._update_slider_position()
         self._update_frame_label()
-        self._timeline.set_data(self._side_map, self._toggles, self._total_frames, self._current_k)
+        self._timeline.set_data(self._toggles, len(self._side_map), self._current_k)
 
     def _render_side_frame(self) -> None:
         if self._last_side_frame is None:
@@ -592,7 +727,7 @@ class LabelWindow(QMainWindow):
     def _render_main_frame(self) -> None:
         if self._main_cap is None:
             return
-        idx = global_to_main_index(self._main_map, self._current_global_frame())
+        idx = global_to_main_index(self._main_map, self._current_corrected_global())
         if idx is None:
             return
         self._main_cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
@@ -606,7 +741,7 @@ class LabelWindow(QMainWindow):
         self._updating_slider = False
 
     def _update_frame_label(self) -> None:
-        g = self._current_global_frame()
+        g = self._current_corrected_global()
         self._frame_label.setText(f"{g} / {max(self._total_frames - 1, 0)}")
 
     def _on_slider_changed(self, value: int) -> None:
@@ -645,28 +780,35 @@ class LabelWindow(QMainWindow):
         if self._playing:
             self._set_playing(True)
 
-    # --- 토글 편집 ---
+    # --- 지연 오프셋 ---
+
+    def _on_offset_changed(self, _value: int) -> None:
+        self._dirty = True
+        self._render_main_frame()
+        self._refresh_after_edit()
+
+    # --- 토글 편집 (모두 측면 프레임 인덱스 k 공간에서 동작) ---
 
     def _mark_toggle(self) -> None:
         if not self._side_map:
             return
-        g = self._current_global_frame()
-        if g in self._toggles:
-            self._toggles.remove(g)
-            if g in self._undo_stack:
-                self._undo_stack.remove(g)
+        k = self._current_k
+        if k in self._toggles:
+            self._toggles.remove(k)
+            if k in self._undo_stack:
+                self._undo_stack.remove(k)
         else:
-            bisect.insort(self._toggles, g)
-            self._undo_stack.append(g)
+            bisect.insort(self._toggles, k)
+            self._undo_stack.append(k)
         self._dirty = True
         self._refresh_after_edit()
 
     def _undo_last_toggle(self) -> None:
         if not self._undo_stack:
             return
-        g = self._undo_stack.pop()
-        if g in self._toggles:
-            self._toggles.remove(g)
+        k = self._undo_stack.pop()
+        if k in self._toggles:
+            self._toggles.remove(k)
         self._dirty = True
         self._refresh_after_edit()
 
@@ -674,9 +816,9 @@ class LabelWindow(QMainWindow):
         row = self._toggle_list.currentRow()
         if row < 0 or row >= len(self._toggles):
             return
-        g = self._toggles.pop(row)
-        if g in self._undo_stack:
-            self._undo_stack.remove(g)
+        k = self._toggles.pop(row)
+        if k in self._undo_stack:
+            self._undo_stack.remove(k)
         self._dirty = True
         self._refresh_after_edit()
 
@@ -684,28 +826,27 @@ class LabelWindow(QMainWindow):
         row = self._toggle_list.currentRow()
         if row < 0 or row >= len(self._toggles):
             return
-        g = self._toggles[row]
-        k = global_to_side_index(self._side_map, g)
-        new_k = max(0, min(k + delta, len(self._side_map) - 1))
-        new_g = self._side_map[new_k] if self._side_map else g
-        if new_g == g:
+        k = self._toggles[row]
+        new_k = max(0, min(k + delta, len(self._side_map) - 1)) if self._side_map else k
+        if new_k == k:
             return
-        if new_g in self._toggles:
+        if new_k in self._toggles:
             self.statusBar().showMessage("이미 같은 프레임에 토글이 있습니다")
             return
-        self._toggles[row] = new_g
+        self._toggles[row] = new_k
         self._toggles.sort()
-        if g in self._undo_stack:
-            self._undo_stack[self._undo_stack.index(g)] = new_g
+        if k in self._undo_stack:
+            self._undo_stack[self._undo_stack.index(k)] = new_k
         self._dirty = True
         self._refresh_after_edit()
         self._seek(new_k)
 
     def _refresh_after_edit(self) -> None:
         self._toggle_list.clear()
-        for i, g in enumerate(self._toggles):
-            self._toggle_list.addItem(format_toggle_label(i, g))
-        self._timeline.set_data(self._side_map, self._toggles, self._total_frames, self._current_k)
+        for i, k in enumerate(self._toggles):
+            g = self._corrected_global_for_k(k)
+            self._toggle_list.addItem(format_toggle_label(i, k, g))
+        self._timeline.set_data(self._toggles, len(self._side_map), self._current_k)
         self._render_side_frame()
 
     # --- 저장 ---
@@ -713,7 +854,9 @@ class LabelWindow(QMainWindow):
     def _save(self) -> None:
         if self._labels_path is None:
             return
-        labels = expand_labels(self._toggles, self._total_frames)
+        offset = self._offset_spin.value()
+        toggles_g = side_toggles_to_global(self._toggles, self._side_map, offset, self._total_frames)
+        labels = expand_labels(toggles_g, self._total_frames)
         if labels and labels[-1] == 1:
             choice = QMessageBox.question(
                 self,
@@ -724,8 +867,11 @@ class LabelWindow(QMainWindow):
             if choice != QMessageBox.StandardButton.Yes:
                 return
         write_labels_csv(self._labels_path, self._base, labels)
+        save_labeling_offset(self._folder / OFFSETS_FILENAME, self._base, offset)
         self._dirty = False
-        self.statusBar().showMessage(f"저장 완료: {self._labels_path.name} ({len(labels)}프레임)")
+        self.statusBar().showMessage(
+            f"저장 완료: {self._labels_path.name} ({len(labels)}프레임, 오프셋 {offset}프레임 적용)"
+        )
 
     # --- 입력 ---
 
