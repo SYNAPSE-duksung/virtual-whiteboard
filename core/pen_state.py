@@ -3,6 +3,9 @@
 입력 랜드마크는 ``HandTracker``가 반환하는 정규화 좌표 배열
 (shape ``(21, 3)``, 각 행 ``(x, y, z)``, 값 범위 0~1)을 전제로 한다.
 CV 좌표만 다루며 UI/렌더링에 의존하지 않는다.
+
+랜드마크 인덱스 상수는 ``core.distances``가 단일 소스이며, 기존 import 경로
+(``from core.pen_state import INDEX_TIP`` 등)를 유지하기 위해 여기서 재수출한다.
 """
 
 from __future__ import annotations
@@ -11,21 +14,37 @@ import math
 
 import numpy as np
 
-# MediaPipe hand landmark 인덱스
-WRIST = 0
-INDEX_PIP = 6
-INDEX_DIP = 7
-INDEX_TIP = 8
-MIDDLE_MCP = 9
+from core.distances import (
+    FINGER_TIP_PIP_PAIRS,
+    INDEX_DIP,
+    INDEX_PIP,
+    INDEX_TIP,
+    MIDDLE_MCP,
+    WRIST,
+)
 
-# 지우기(손 펴기) 제스처 판정용 (끝 landmark, PIP landmark) 쌍
-FINGER_TIP_PIP_PAIRS: tuple[tuple[int, int], ...] = ((8, 6), (12, 10), (16, 14), (20, 18))
+__all__ = [
+    "WRIST",
+    "INDEX_PIP",
+    "INDEX_DIP",
+    "INDEX_TIP",
+    "MIDDLE_MCP",
+    "FINGER_TIP_PIP_PAIRS",
+    "compute_pen_ratio",
+    "is_open_hand",
+    "PenStateDetector",
+]
 
 
 def compute_pen_ratio(normalized_landmarks: np.ndarray, width: int, height: int) -> float:
     """검지 Tip(8)–DIP(7) y좌표 차이를 손 크기(wrist–middle_mcp)로 정규화한 비율.
 
     값이 작을수록 손가락이 눌린(pen-down) 상태로 판단한다. 손 크기가 0에 가까우면 1.0 반환.
+
+    NOTE: 3주차 "정규화 수식 검증"의 **베이스라인**이다. 이 함수의 출력은
+    ``tools/extract_landmarks.py``가 만드는 ``_coords.csv``의 ``pen_ratio`` 컬럼에
+    그대로 들어가므로, 수식을 바꾸면 이미 추출한 CSV와 값이 어긋난다. 대안 수식은
+    이 함수를 고치지 말고 ``core.distances``를 써서 별도 함수로 추가해 비교할 것.
     """
     lm = normalized_landmarks
     tip = lm[INDEX_TIP]
