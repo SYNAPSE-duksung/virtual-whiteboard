@@ -2,7 +2,9 @@
 
 펜 판정은 두 모드를 ``M`` 키로 전환한다 (``WhiteboardSession.auto_mode``):
 - 자동(AUTO): ``core.PenTracker``가 손끝 위치(pen_ratio)로 pen up/down을 판정하고,
-  손을 펴면(open hand) 캔버스를 지운다.
+  손을 펴면(open hand) 캔버스를 지운다. 그 위에 ``controller.state_machine.PenStateMachine``이
+  디바운싱·짧은 트래킹 손실 시 획 유지·지우기 확정을 담당해 순간 오판이 그대로 렌더링에
+  반영되지 않도록 안정화한다.
 - 수동(MANUAL): 기존 방식. SPACE로 pen up/down을 토글하고 C로 지운다 (자동 판정 무시).
 
 키:
@@ -18,11 +20,13 @@ from __future__ import annotations
 
 import argparse
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 import cv2
 import numpy as np
 
+from controller.state_machine import PenStateMachine
 from core.pen_tracker import PenTracker
 from core.recorder import CoordRecorder, CoordSample
 from ui.canvas import StrokeCanvas
@@ -33,6 +37,22 @@ _STATUS_COLORS = {
     "ERASE": (0, 215, 255),
     "HAND LOST": (0, 100, 255),
 }
+
+
+@dataclass(frozen=True, slots=True)
+class SessionDebug:
+    """UI 디버그 패널용 세션 상태 스냅샷 (``WhiteboardSession.debug``)."""
+
+    mode: str  # "AUTO" | "MANUAL"
+    hand_detected: bool
+    pen_ratio: float | None  # 마지막 프레임의 순간 pen_ratio
+    down_thresh: float
+    up_thresh: float
+    instant_pen_down: bool  # PenTracker 순간 판정
+    stable_pen_down: bool  # 상태머신 안정 판정 (수동 모드에선 _pen_requested)
+    status: str
+    pending: str | None  # 수동 모드에선 None
+    erase_progress: float  # 수동 모드에선 0.0
 
 
 class WhiteboardSession:
@@ -53,6 +73,10 @@ class WhiteboardSession:
         beta: float = 0.3,
         pen_down_thresh: float = 0.55,
         pen_up_thresh: float = 0.70,
+        down_confirm_sec: float = 0.066,
+        up_confirm_sec: float = 0.15,
+        loss_tolerance_sec: float = 0.10,
+        erase_confirm_sec: float = 0.25,
         output_dir: str | Path = "output",
     ) -> None:
         self._tracker = PenTracker(
@@ -60,6 +84,14 @@ class WhiteboardSession:
             beta=beta,
             pen_down_thresh=pen_down_thresh,
             pen_up_thresh=pen_up_thresh,
+        )
+        self._pen_down_thresh = pen_down_thresh
+        self._pen_up_thresh = pen_up_thresh
+        self._state_machine = PenStateMachine(
+            down_confirm_sec=down_confirm_sec,
+            up_confirm_sec=up_confirm_sec,
+            loss_tolerance_sec=loss_tolerance_sec,
+            erase_confirm_sec=erase_confirm_sec,
         )
         self._recorder = CoordRecorder(output_dir)
         self._line_color = line_color
@@ -70,6 +102,9 @@ class WhiteboardSession:
         # 수동 모드에서 SPACE/버튼으로 켜는 펜 상태.
         self._pen_requested = False
         self._status = "PEN UP"
+        # 디버그 패널용: 마지막으로 처리한 PenFrame/PenDecision (처리 전에는 None).
+        self._last_frame = None
+        self._last_decision = None
 
     @property
     def pen_requested(self) -> bool:
@@ -90,6 +125,35 @@ class WhiteboardSession:
     @property
     def canvas(self) -> StrokeCanvas | None:
         return self._canvas
+
+    @property
+    def debug(self) -> SessionDebug:
+        """UI 디버그 패널용 스냅샷. 아직 프레임을 처리하지 않았으면 초기값을 반환한다."""
+        frame = self._last_frame
+        decision = self._last_decision
+        hand_detected = frame.hand_detected if frame is not None else False
+        pen_ratio = frame.pen_ratio if frame is not None else None
+        instant_pen_down = frame.pen_down if frame is not None else False
+        if self._auto_mode:
+            stable_pen_down = decision.pen_down if decision is not None else False
+            pending = decision.pending if decision is not None else None
+            erase_progress = decision.erase_progress if decision is not None else 0.0
+        else:
+            stable_pen_down = self._pen_requested
+            pending = None
+            erase_progress = 0.0
+        return SessionDebug(
+            mode=self.mode_name,
+            hand_detected=hand_detected,
+            pen_ratio=pen_ratio,
+            down_thresh=self._pen_down_thresh,
+            up_thresh=self._pen_up_thresh,
+            instant_pen_down=instant_pen_down,
+            stable_pen_down=stable_pen_down,
+            status=self._status,
+            pending=pending,
+            erase_progress=erase_progress,
+        )
 
     def set_pen_down(self, down: bool) -> None:
         """수동 모드 펜 상태 설정 (자동 모드에서는 무시)."""
@@ -116,6 +180,7 @@ class WhiteboardSession:
         """모드 전환 시 이전 모드의 펜 상태가 새 모드로 번지지 않도록 초기화."""
         self._pen_requested = False
         self._tracker.reset()
+        self._state_machine.reset()
         if self._canvas is not None:
             self._canvas.pen_up()
         self._status = "PEN UP"
@@ -165,30 +230,37 @@ class WhiteboardSession:
 
         result = self._tracker.process(bgr_frame)
         fingertip = result.fingertip
-        if not result.hand_detected:
-            # Tracking loss must break the stroke, otherwise the next
-            # detection draws a straight line from the stale point.
-            self._canvas.pen_up()
-            self._status = "HAND LOST"
-        elif self._auto_mode:
-            # 자동 모드: pen_ratio 자동 판정 + 손 펴기 지우기 (PenTracker).
-            if result.erase_gesture:
+        self._last_frame = result
+
+        if self._auto_mode:
+            # 자동 모드: 손실 프레임도 포함해 항상 상태머신을 거친다 (손실 홀드는
+            # PenStateMachine의 책임 — 여기서 손실을 먼저 걸러내면 브리징이 깨진다).
+            decision = self._state_machine.update(result)
+            self._last_decision = decision
+            if decision.erase:
                 self._canvas.clear()
-                self._status = "ERASE"
-            elif result.pen_down:
-                self._draw_to(fingertip)
-                self._status = "PEN DOWN"
-            else:
+            elif decision.draw_point is not None:
+                self._draw_to(decision.draw_point)
+            elif not decision.pen_down:
                 self._canvas.pen_up()
-                self._status = "PEN UP"
+            # else: 홀드(안정 down인데 이번 프레임은 그리지 않음) — 아무것도 하지 않는다.
+            # 여기서 canvas.pen_up()을 부르면 진행 중 획이 끊겨 브리징(획 이어붙이기)이 깨진다.
+            self._status = decision.status
         else:
-            # 수동 모드: 키보드/버튼 펜만 사용 (지우기는 clear() = C 키).
-            if self._pen_requested:
-                self._draw_to(fingertip)
-                self._status = "PEN DOWN"
-            else:
+            self._last_decision = None
+            if not result.hand_detected:
+                # Tracking loss must break the stroke, otherwise the next
+                # detection draws a straight line from the stale point.
                 self._canvas.pen_up()
-                self._status = "PEN UP"
+                self._status = "HAND LOST"
+            else:
+                # 수동 모드: 키보드/버튼 펜만 사용 (지우기는 clear() = C 키).
+                if self._pen_requested:
+                    self._draw_to(fingertip)
+                    self._status = "PEN DOWN"
+                else:
+                    self._canvas.pen_up()
+                    self._status = "PEN UP"
 
         # 기록 중이면 매 프레임 CSV로 남긴다 (모드 무관, 기록 중이 아니면 no-op).
         self._recorder.write(CoordSample.from_pen_frame(result))
