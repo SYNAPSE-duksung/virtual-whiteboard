@@ -321,6 +321,11 @@ def main() -> int:
         action="store_true",
         help="flip the frame horizontally (selfie view; off by default for the desk view)",
     )
+    parser.add_argument(
+        "--flip-vertical",
+        action="store_true",
+        help="flip the frame vertically (oblique webcam upside-down fix; independent of --mirror)",
+    )
     args = parser.parse_args()
 
     camera = cv2.VideoCapture(args.camera)
@@ -339,6 +344,8 @@ def main() -> int:
                     return 1
                 if args.mirror:
                     frame = cv2.flip(frame, 1)
+                if args.flip_vertical:
+                    frame = cv2.flip(frame, 0)
 
                 annotated = session.process_frame(frame)
 

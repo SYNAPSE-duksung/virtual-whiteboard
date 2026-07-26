@@ -105,7 +105,7 @@ class RatioBar(QWidget):
 
 class WhiteboardWindow(QMainWindow):
 
-    def __init__(self, camera_index: int, *, mirror: bool = False) -> None:
+    def __init__(self, camera_index: int, *, mirror: bool = False, flip_vertical: bool = False) -> None:
         super().__init__()
         self.setWindowTitle("Virtual Whiteboard")
 
@@ -113,6 +113,7 @@ class WhiteboardWindow(QMainWindow):
         if not self._camera.isOpened():
             raise RuntimeError(f"카메라 {camera_index}을(를) 열 수 없습니다.")
         self._mirror = mirror
+        self._flip_vertical = flip_vertical
         self._session = WhiteboardSession()
 
         self._video = QLabel("카메라 대기 중...")
@@ -235,6 +236,8 @@ class WhiteboardWindow(QMainWindow):
             return
         if self._mirror:
             frame = cv2.flip(frame, 1)
+        if self._flip_vertical:
+            frame = cv2.flip(frame, 0)
 
         annotated = self._session.process_frame(frame)
         status = f"[{self._session.mode_name}] {self._session.status}"
@@ -321,10 +324,15 @@ def main() -> int:
         action="store_true",
         help="flip the frame horizontally (selfie view; off by default for the desk view)",
     )
+    parser.add_argument(
+        "--flip-vertical",
+        action="store_true",
+        help="flip the frame vertically (oblique webcam upside-down fix; independent of --mirror)",
+    )
     args = parser.parse_args()
 
     app = QApplication(sys.argv)
-    window = WhiteboardWindow(args.camera, mirror=args.mirror)
+    window = WhiteboardWindow(args.camera, mirror=args.mirror, flip_vertical=args.flip_vertical)
     window.show()
     return app.exec()
 
