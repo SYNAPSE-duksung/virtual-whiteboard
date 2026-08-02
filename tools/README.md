@@ -7,6 +7,8 @@
 - **`record_dual.py`**: 메인(사선) + 측면(스마트폰) 카메라를 동시에 모니터링하며 녹화하는 PyQt GUI 도구입니다.
 - **`extract_landmarks.py`**: `record_dual`로 찍은 main 영상에서 오프라인으로 랜드마크·pen_ratio·pen_down을 뽑아 학습용 CSV를 만듭니다.
 - **`label_frames.py`**: 측면 영상을 보며 pen down/up 정답 라벨을 토글 방식으로 매기는 GUI 도구입니다.
+- **`calibrate.py`** (A, 4주차): 카메라로 책상 위 필기 영역의 네 모서리를 클릭해 `core.geometry.PerspectiveCalibration`을 계산·저장하는 독립 실행 도구입니다. 같은 4점 지정 로직(`core.geometry.CalibrationPicker`)이 `controller/main.py`(OpenCV 데모, `K` 키)에도 내장되어 있어 세션 안에서 바로 (재)캘리브레이션할 수 있습니다.
+- **`validate_normalization.py`**, **`validate_z_axis.py`** (A, 3주차): 합성 3D 손 모델로 정규화 수식·Z축 임계값을 실촬영 없이 검증하는 스크립트입니다. D 데이터가 쌓이면 같은 프레임워크(`RatioSpec`)에 실데이터를 물려 ROC까지 확장할 수 있습니다.
 
 ## 2. record_dual 사용법
 
@@ -70,3 +72,41 @@ python -m tools.label_frames
 - **키**: `SPACE` 재생/정지, 재생 속도 0.5×/1×/2×, `←`/`→` 1프레임, `Shift+←`/`Shift+→` 10프레임, `T` 토글, `Ctrl+Z` 마지막 토글 취소, `Ctrl+S` 저장.
 - **출력**: `{base}_labels.csv` (`video_id, frame_id, pen_down`, 프레임당 1행). `{base}_coords.csv`와 `video_id + frame_id`로 조인하면 학습 데이터가 완성됩니다. 기존 라벨 파일이 있으면 불러와 이어서 편집합니다.
 - **참고**: 프레임 누락이 있어도 `_frames.csv`를 매개로 전역 frame_index에 정렬되므로 coords와 어긋나지 않습니다.
+
+## 7. calibrate 사용법 (A, 4주차)
+
+책상 위 필기 영역의 네 모서리(사선 각도로 찍힌 사다리꼴)를 클릭으로 지정해, 위에서 내려다본 것처럼 반듯하게 펴는 투시 변환(`cv2.getPerspectiveTransform`/`warpPerspective`)을 계산·저장하는 도구입니다.
+
+```
+python -m tools.calibrate
+```
+
+- **순서**: 화면을 좌클릭해 **TL(좌상단) → TR(우상단) → BR(우하단) → BL(좌하단)** 순서로 4점을 찍습니다. 순서가 꼬여 자기교차(나비꼴) 사각형이 되거나 점끼리 너무 가까우면 저장 시 오류 메시지가 뜨고 저장되지 않습니다.
+- **키**: `z` 마지막 점 취소, `r` 전체 리셋, `p` 정류(bird's-eye) 미리보기 창 토글(4점 완료 후), `s` 저장, `q` 종료.
+- **출력**: `output/calibration.json` (경로는 `--output`으로 변경 가능). 정류 캔버스 크기(`dst_size`)는 지정하지 않으면 원본 사각형의 변 길이로 자동 추정됩니다(비율 보존).
+- **재사용**: `core.geometry.PerspectiveCalibration.load("output/calibration.json")`으로 다른 스크립트에서 그대로 불러와 `warp_frame()`(이미지 정류), `to_rectified()`/`from_rectified()`(좌표 매핑), `contains()`(점이 필기 영역 안인지) 등을 쓸 수 있습니다.
+- **판정 파이프라인 연결됨**: `controller.main.WhiteboardSession`이 세션 시작 시 `output/calibration.json`을 자동 로드하고, `core.PenTracker`가 `contains()`로 손끝이 평면 밖일 때 pen_ratio 판정과 무관하게 강제 pen up으로 게이팅한다(⚠️ 2D 평면 범위 판정이며 진짜 3D 접촉/높이 판정은 아님 — `core/pen_tracker.py` docstring 참고). `extract_landmarks.py`(D의 오프라인 CSV 추출)에는 아직 연결되지 않았고, 그 방향은 여전히 8절 협의 대상입니다.
+- **재캘리브레이션**: `controller/main.py` 데모는 캘리브레이션이 없으면(최초 실행) 시작 시 자동으로 지정을 강제하고, 이후에는 `K` 키로 언제든 다시 캘리브레이션할 수 있습니다(적용 전까지 기존 캘리브레이션은 유지). 카메라 위치·화각이 바뀌면 재캘리브레이션이 필요합니다 — 촬영 세션마다 언제 다시 찍을지는 8절 협의 대상입니다.
+
+## 8. [제안 — D와 페어세션에서 확정] 캘리브레이션 데이터 협의 초안
+
+> 이 절은 A가 실제로 D와 만나 확정한 내용이 아니라, **페어세션에서 논의할 안건을 미리 정리한 초안**입니다. 세션 후 합의된 내용으로 이 절을 덮어써 주세요.
+
+**`calibration.json` 스키마** (이미 구현·고정됨, `core/geometry.py`):
+
+```json
+{
+  "version": 1,
+  "src_points": [[x,y], [x,y], [x,y], [x,y]],  // TL,TR,BR,BL, 원본 카메라 픽셀 좌표
+  "dst_size": [width, height],                  // 정류 캔버스 크기(px)
+  "created_at": 1234567890.0,
+  "source_frame_size": [width, height]           // 캘리브레이션 당시 카메라 프레임 크기(참고용)
+}
+```
+
+**논의할 것**:
+
+1. **D의 CSV에 정류 좌표를 추가할 가치가 있는가?** `extract_landmarks.py`가 캘리브레이션 파일을 읽어 `rectified_x`, `rectified_y`(손끝을 `to_rectified()`로 변환한 값) 컬럼을 `{base}_coords.csv`에 추가할 수 있습니다. 사선 왜곡이 제거된 좌표라 시계열 feature(속도 등)가 더 안정적일 수 있는데, ML 모델 입력으로 실제 도움이 되는지는 실험이 필요합니다.
+2. **촬영 세션당 캘리브레이션을 언제 찍는가?** 카메라가 고정이면 세션 시작 시 1회로 충분하지만, `record_dual.py` 촬영마다 카메라 위치가 달라지면 매 회차 재캘리브레이션이 필요합니다 — 촬영 프로토콜(4절)에 캘리브레이션 단계를 넣을지 결정이 필요합니다.
+3. **`contains()`(필기 영역 내부 판정)를 라벨링에 쓸 수 있는가?** `label_frames.py`가 측면 영상으로 pen down/up을 라벨링할 때, `contains()`로 "손끝이 애초에 필기 영역 밖"인 프레임을 걸러내면 라벨링 품질에 도움이 될 수 있습니다.
+4. **파일 공유 위치**: `calibration.json`은 `output/`(gitignore)에 저장되므로 git으로 공유되지 않습니다 — 팀이 공유할 필요가 있다면 구글 드라이브 등 별도 채널이 필요합니다(3절의 영상 파일과 동일한 문제).
