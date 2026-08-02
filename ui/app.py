@@ -155,6 +155,12 @@ class WhiteboardWindow(QMainWindow):
         self._record_button.setCheckable(True)
         self._record_button.toggled.connect(self._on_record_toggled)
 
+        # 3D 접촉 판정 근거(평면 수선 벡터·높이 게이지·수치)를 영상 위에 겹쳐 본다.
+        self._debug3d_button = QPushButton("3D 디버그 (D)")
+        self._debug3d_button.setCheckable(True)
+        self._debug3d_button.setChecked(self._session.debug_3d)
+        self._debug3d_button.toggled.connect(self._session.set_debug_3d)
+
         clear_button = QPushButton("지우기")
         clear_button.clicked.connect(self._session.clear)
         save_button = QPushButton("저장")
@@ -170,6 +176,7 @@ class WhiteboardWindow(QMainWindow):
             self._mode_button,
             self._pen_button,
             self._record_button,
+            self._debug3d_button,
             clear_button,
             save_button,
             quit_button,
@@ -202,6 +209,8 @@ class WhiteboardWindow(QMainWindow):
             self._mode_button.toggle()
         elif event.key() == Qt.Key.Key_R:
             self._record_button.toggle()
+        elif event.key() == Qt.Key.Key_D:
+            self._debug3d_button.toggle()
         else:
             super().keyPressEvent(event)
 
@@ -294,7 +303,11 @@ class WhiteboardWindow(QMainWindow):
         else:
             instant = "DOWN" if debug.instant_pen_down else "UP"
             stable = "DOWN" if debug.stable_pen_down else "UP"
-            self._status_label2.setText(f"순간: {instant} / 안정: {stable}")
+            text = f"순간: {instant} / 안정: {stable}"
+            if debug.height_mm is not None:
+                # 3D 판정 중이면 판정에 실제로 쓰인 높이를 함께 보여준다 (Qt는 한글 표시 가능).
+                text += f"  |  높이 {debug.height_mm:+.1f}mm"
+            self._status_label2.setText(text)
             self._status_label2.setStyleSheet(
                 "color: #1a8a3c;" if debug.stable_pen_down else "color: #555555;"
             )

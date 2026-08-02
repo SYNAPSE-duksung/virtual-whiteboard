@@ -271,6 +271,10 @@ def process_video(video_path: Path, *, args: argparse.Namespace) -> None:
                         pen_down=pen_down,
                         erase_gesture=erase_gesture,
                         pen_ratio=pen_ratio,
+                        # 이 도구는 오프라인 영상에서 추출만 하므로 평면 캘리브레이션이 없다
+                        # (None = 게이팅·정류 비활성). CSV 컬럼은 빈 값으로 남는다.
+                        in_bounds=None,
+                        rectified=None,
                     )
                     normalized_landmarks = landmarks
 

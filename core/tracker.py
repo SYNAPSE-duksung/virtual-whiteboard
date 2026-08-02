@@ -16,13 +16,27 @@ class TrackedHand:
     handedness: str
     score: float
     normalized_landmarks: np.ndarray
-    pixel_landmarks: np.ndarray
+    pixel_landmarks: np.ndarray  # 정수 픽셀 (그리기·기존 코드용)
+    # MediaPipe world landmarks: 손 중심을 원점으로 한 **미터 단위** 3D 좌표 (21, 3).
+    # normalized_landmarks의 z는 상대 깊이 근사일 뿐이지만, 이쪽은 실제 metric 손 모델이라
+    # solvePnP로 손의 3D 위치를 복원하는 데 쓸 수 있다 (core.contact3d). 미제공 시 None.
+    world_landmarks: np.ndarray | None = None
+    #: 서브픽셀 정밀도 픽셀 좌표 (21, 2). solvePnP처럼 정밀도가 정확도로 직결되는 계산에
+    #: 쓴다 — ``pixel_landmarks``의 정수 반올림은 3D 높이에 수십 분의 1 mm 오차를 만든다.
+    pixel_landmarks_f: np.ndarray | None = None
 
     @property
     def index_fingertip(self) -> tuple[int, int]:
         """Return the index fingertip (landmark 8) in pixel coordinates."""
         x, y = self.pixel_landmarks[8]
         return int(x), int(y)
+
+    @property
+    def world_landmarks_mm(self) -> np.ndarray | None:
+        """World landmarks를 밀리미터 단위로 변환해 반환 (없으면 None)."""
+        if self.world_landmarks is None:
+            return None
+        return self.world_landmarks * 1000.0
 
 
 class HandTracker:
@@ -57,25 +71,34 @@ class HandTracker:
             return []
 
         handedness = result.multi_handedness or []
+        world_landmarks = getattr(result, "multi_hand_world_landmarks", None) or []
         tracked: list[TrackedHand] = []
         for index, hand_landmarks in enumerate(result.multi_hand_landmarks):
             normalized = np.asarray(
                 [(point.x, point.y, point.z) for point in hand_landmarks.landmark],
                 dtype=np.float32,
             )
-            pixels = np.column_stack(
+            pixels_f = np.column_stack(
                 (
                     np.clip(normalized[:, 0] * width, 0, width - 1),
                     np.clip(normalized[:, 1] * height, 0, height - 1),
                 )
-            ).astype(np.int32)
+            ).astype(np.float64)
+            pixels = pixels_f.astype(np.int32)
 
             label, score = "Unknown", 0.0
             if index < len(handedness) and handedness[index].classification:
                 classification = handedness[index].classification[0]
                 label, score = classification.label, float(classification.score)
 
-            tracked.append(TrackedHand(label, score, normalized, pixels))
+            world = None
+            if index < len(world_landmarks):
+                world = np.asarray(
+                    [(p.x, p.y, p.z) for p in world_landmarks[index].landmark],
+                    dtype=np.float32,
+                )
+
+            tracked.append(TrackedHand(label, score, normalized, pixels, world, pixels_f))
 
         return tracked
 

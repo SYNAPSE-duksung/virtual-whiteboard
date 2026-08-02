@@ -92,6 +92,18 @@ class PenStateDetector:
             self._pen_down = pen_ratio < self.down_thresh
         return self._pen_down
 
+    def set_thresholds(self, *, down_thresh: float, up_thresh: float) -> None:
+        """임계값을 런타임에 교체한다 (예: 터치 캘리브레이션으로 재추정한 값 적용).
+
+        히스테리시스 순서(``down_thresh <= up_thresh``)가 깨지면 거부한다. 진행 중이던
+        판정 상태(``pen_down``)는 건드리지 않으므로, 완전히 새로 시작하려면 호출부가
+        별도로 ``reset()``도 부를 것.
+        """
+        if down_thresh > up_thresh:
+            raise ValueError("down_thresh must be <= up_thresh for stable hysteresis")
+        self.down_thresh = float(down_thresh)
+        self.up_thresh = float(up_thresh)
+
     def reset(self) -> None:
         """트래킹 손실·지우기 제스처 시 호출: pen-up으로 되돌린다."""
         self._pen_down = False
