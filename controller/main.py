@@ -1108,6 +1108,8 @@ def main() -> int:
                     return 1
                 if args.mirror:
                     frame = cv2.flip(frame, 1)
+                if args.flip_vertical:
+                    frame = cv2.flip(frame, 0)
 
                 annotated = session.process_frame(frame)
 
