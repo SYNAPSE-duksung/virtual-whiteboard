@@ -64,10 +64,11 @@ def draw_overlay(
         pts_arr = np.array([[int(x), int(y)] for x, y in points], dtype=np.int32)
         cv2.polylines(annotated, [pts_arr], closed, _LINE_COLOR, 2, cv2.LINE_AA)
 
+    # ASCII로만 작성 (Hershey 폰트에 한글 글리프가 없어 한글은 ?????로 깨진다).
     guide = (
-        f"다음 클릭: {picker.next_label} ({picker.count}/4)"
+        f"next click: {picker.next_label} ({picker.count}/4)"
         if not picker.is_complete
-        else "4점 완료 — s 저장 / p 미리보기 / z 취소 / r 리셋"
+        else "4 points done - s save / p preview / z undo / r reset"
     )
     cv2.putText(annotated, guide, (15, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.75, _TEXT_COLOR, 2, cv2.LINE_AA)
 
@@ -150,7 +151,8 @@ def main() -> int:
                     cv2.destroyWindow("Rectified preview")
             elif key == ord("p"):
                 if not picker.is_complete:
-                    message, message_ok = "4점을 먼저 모두 지정하세요.", False
+                    # 화면 오버레이에 표시되므로 ASCII로만 작성 (한글 글리프 없음).
+                    message, message_ok = "Place all 4 points first.", False
                 else:
                     show_preview = not show_preview
                     if not show_preview:
@@ -158,10 +160,10 @@ def main() -> int:
             elif key == ord("s"):
                 cal, err = picker.try_build(source_frame_size=(width, height))
                 if cal is None:
-                    message, message_ok = err or "4점을 먼저 모두 지정하세요.", False
+                    message, message_ok = err or "Place all 4 points first.", False
                 else:
                     path = cal.save(args.output)
-                    message, message_ok = f"저장 완료: {path} (dst={cal.dst_size})", True
+                    message, message_ok = f"Saved: {path} (dst={cal.dst_size})", True
                     print(f"[캘리브레이션] 저장: {path}")
                     print(f"  src_points(TL,TR,BR,BL)={cal.src_points.as_array().tolist()}")
                     print(f"  dst_size={cal.dst_size}")

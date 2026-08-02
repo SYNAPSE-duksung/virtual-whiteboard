@@ -42,9 +42,11 @@ from core.geometry import DEFAULT_CALIBRATION_PATH, PerspectiveCalibration
 from core.pen_state import compute_pen_ratio
 from core.tracker import HandTracker
 
+# cv2.putText로 화면에 그대로 표시되므로 ASCII로만 작성한다 (Hershey 폰트에 한글
+# 글리프가 없어 한글은 ?????로 깨진다). 콘솔 안내(module docstring)는 한글 그대로 둔다.
 PHASES = (
-    ("contact", "손끝을 책상(캘리브레이션 영역 안)에 **대고** 가만히 유지하세요"),
-    ("hover", "같은 위치에서 손끝을 약 3cm **띄운 채** 가만히 유지하세요"),
+    ("contact", "hold your fingertip ON the surface (inside the calibrated area)"),
+    ("hover", "hold your fingertip ~3cm ABOVE the same spot"),
 )
 
 
@@ -164,11 +166,11 @@ def main() -> int:
                     missing += 1
 
                 remain = deadline - now
-                banner = prompt if collecting else f"{prompt}  (준비 {collecting_from - now:.1f}s)"
+                banner = prompt if collecting else f"{prompt}  (get ready {collecting_from - now:.1f}s)"
                 cv2.putText(frame, f"[{phase}] {banner}", (15, 40),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2, cv2.LINE_AA)
                 if collecting:
-                    cv2.putText(frame, f"수집 중... {max(remain, 0):.1f}s  (n={len(heights)})", (15, 75),
+                    cv2.putText(frame, f"collecting... {max(remain, 0):.1f}s  (n={len(heights)})", (15, 75),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 220, 60), 2, cv2.LINE_AA)
                 cv2.imshow(window, frame)
 

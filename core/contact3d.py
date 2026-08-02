@@ -267,6 +267,11 @@ class Contact3DEstimator:
         self._intrinsics = intrinsics
         self._zero_offset_mm = float(zero_offset_mm)
         self._landmark_index = landmark_index
+        # 마지막 measure() 호출의 재투영 오차(px). 문턱을 넘겨 실패한 프레임도 값을 남긴다
+        # (성공 프레임과 구분하려면 last_measure_ok도 함께 본다) — "왜 실패하는지"(문턱
+        # 근처인지 완전히 틀렸는지)를 디버그 오버레이에서 확인할 수 있게 하기 위함.
+        self.last_reprojection_error_px: float | None = None
+        self.last_measure_ok: bool = False
 
     @property
     def plane_pose(self) -> PlanePose:
@@ -288,6 +293,8 @@ class Contact3DEstimator:
         """
         world_mm = getattr(hand, "world_landmarks_mm", None)
         if world_mm is None:
+            self.last_reprojection_error_px = None
+            self.last_measure_ok = False
             return None
         # 정수 픽셀로 반올림하면 그 양자화가 그대로 높이 오차가 되므로 서브픽셀 좌표를 우선한다.
         image_points = getattr(hand, "pixel_landmarks_f", None)
@@ -296,9 +303,15 @@ class Contact3DEstimator:
         try:
             hand_pose, error = estimate_hand_pose(world_mm, image_points, self._intrinsics)
         except (Contact3DError, cv2.error):
+            # solvePnP 자체가 실패(랜드마크 퇴화 등) — 재투영 오차 수치조차 없다.
+            self.last_reprojection_error_px = None
+            self.last_measure_ok = False
             return None
+        self.last_reprojection_error_px = error
         if error > MAX_REPROJECTION_ERROR_PX:
+            self.last_measure_ok = False
             return None
+        self.last_measure_ok = True
 
         tip_cam = hand_pose.to_camera(world_mm[self._landmark_index].reshape(1, 3))[0]
         raw_height = self._plane.height_of(tip_cam)

@@ -53,7 +53,7 @@ class CalibrationError(ValueError):
 def _as_array(points: Sequence[Point]) -> np.ndarray:
     arr = np.asarray(points, dtype=np.float64)
     if arr.shape != (4, 2):
-        raise CalibrationError(f"4점(각 (x, y))이 필요합니다: shape={arr.shape}")
+        raise CalibrationError(f"expected 4 points (x, y) each: shape={arr.shape}")
     return arr
 
 
@@ -68,15 +68,17 @@ def _validate_points(points: np.ndarray) -> None:
     for i in range(4):
         for j in range(i + 1, 4):
             if math.dist(points[i], points[j]) < MIN_POINT_SEPARATION_PX:
+                # 이 메시지는 controller/main.py의 cv2 오버레이에 그대로 표시된다 —
+                # Hershey 폰트에 한글 글리프가 없어 ASCII로만 작성한다.
                 raise CalibrationError(
-                    f"점 {i}와 {j}가 너무 가깝습니다 "
-                    f"({math.dist(points[i], points[j]):.1f}px) — 다시 지정하세요."
+                    f"points {i} and {j} are too close "
+                    f"({math.dist(points[i], points[j]):.1f}px) - reselect."
                 )
 
     area = _quad_area(points)
     if area < MIN_QUAD_AREA_PX:
         raise CalibrationError(
-            f"사각형 면적이 너무 작습니다({area:.1f}px²) — 클릭 지점을 확인하세요."
+            f"quad area too small ({area:.1f}px^2) - check click positions."
         )
 
     # TL,TR,BR,BL 순서라면 사각형은 볼록(convex)이어야 한다. 순서를 잘못 클릭해
@@ -84,8 +86,8 @@ def _validate_points(points: np.ndarray) -> None:
     contour = points.astype(np.int32).reshape(-1, 1, 2)
     if not cv2.isContourConvex(contour):
         raise CalibrationError(
-            "4점이 볼록 사각형을 이루지 않습니다 — TL→TR→BR→BL(시계방향) 순서로 "
-            "다시 클릭하세요 (자기교차 형태로 보임)."
+            "points do not form a convex quad - reclick in TL->TR->BR->BL "
+            "(clockwise) order (looks self-intersecting)."
         )
 
 
@@ -277,7 +279,9 @@ class CalibrationPicker:
     4점 선택 로직이 갈라지지 않게 한다.
     """
 
-    LABELS: tuple[str, ...] = ("TL(좌상단)", "TR(우상단)", "BR(우하단)", "BL(좌하단)")
+    # cv2 오버레이(controller/main.py, tools/calibrate.py)에 그대로 표시되므로 ASCII로만
+    # 작성한다 — Hershey 폰트에 한글 글리프가 없어 한글을 넣으면 ?????로 깨진다.
+    LABELS: tuple[str, ...] = ("TL(top-left)", "TR(top-right)", "BR(bottom-right)", "BL(bottom-left)")
 
     def __init__(self) -> None:
         self._points: list[Point] = []

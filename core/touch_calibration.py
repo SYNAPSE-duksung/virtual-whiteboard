@@ -75,24 +75,26 @@ def estimate_thresholds(
     벌려 히스테리시스 폭을 만든다(채터링 방지). 중앙값을 쓰는 이유는 순간적인 트래킹
     노이즈 몇 프레임에 흔들리지 않기 위함이다.
     """
+    # 이 메시지는 controller/main.py의 cv2 오버레이에 그대로 표시된다 — Hershey 폰트에
+    # 한글 글리프가 없어 ASCII로만 작성한다.
     if len(hover_samples) < MIN_SAMPLES:
         raise TouchCalibrationError(
-            f"hover(비접촉) 표본이 부족합니다 ({len(hover_samples)}/{MIN_SAMPLES}) — "
-            "손가락을 화면 위에 띄운 채로 더 오래 유지하세요."
+            f"not enough hover samples ({len(hover_samples)}/{MIN_SAMPLES}) - "
+            "hold your finger above the surface longer."
         )
     if len(touch_samples) < MIN_SAMPLES:
         raise TouchCalibrationError(
-            f"touch(접촉) 표본이 부족합니다 ({len(touch_samples)}/{MIN_SAMPLES}) — "
-            "책상에 손가락을 댄 채로 더 오래 유지하세요."
+            f"not enough touch samples ({len(touch_samples)}/{MIN_SAMPLES}) - "
+            "hold your finger pressed on the surface longer."
         )
 
     hover_median = statistics.median(hover_samples)
     touch_median = statistics.median(touch_samples)
     if touch_median >= hover_median:
         raise TouchCalibrationError(
-            "접촉/비접촉 표본이 구분되지 않습니다 "
-            f"(touch 중앙값={touch_median:.3f} >= hover 중앙값={hover_median:.3f}) — "
-            "hover 단계에서 손가락이 화면에 닿지 않았는지, touch 단계에서 실제로 눌렀는지 확인하세요."
+            "touch/hover samples are not separated "
+            f"(touch median={touch_median:.3f} >= hover median={hover_median:.3f}) - "
+            "check the finger didn't touch during hover, and did press during touch."
         )
 
     gap = hover_median - touch_median

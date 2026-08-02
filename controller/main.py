@@ -19,7 +19,7 @@ import numpy as np
 
 from controller.state_machine import PenStateMachine
 from core.camera import DEFAULT_INTRINSICS_PATH, CameraIntrinsics
-from core.contact3d import DEFAULT_PLANE_SIZE_MM
+from core.contact3d import DEFAULT_PLANE_SIZE_MM, MAX_REPROJECTION_ERROR_PX
 from core.geometry import DEFAULT_CALIBRATION_PATH, CalibrationPicker, PerspectiveCalibration
 from core.pen_tracker import PenTracker
 from core.recorder import CoordRecorder, CoordSample
@@ -400,7 +400,7 @@ class WhiteboardSession:
             plane_size_mm=self._plane_size_mm if self._use_3d_contact else None,
         )
         if cal is None:
-            self._calibration_message = err or "4점을 먼저 모두 지정하세요."
+            self._calibration_message = err or "Place all 4 points first."
             self._calibration_message_ok = False
             return False
 
@@ -412,8 +412,8 @@ class WhiteboardSession:
         self._calibrating = False
         self._calibration_picker = None
         self._calibration_fingertip = None
-        mode_3d = "3D 접촉 ON" if self._tracker.has_3d_contact else "3D 접촉 OFF(pen_ratio 폴백)"
-        self._calibration_message = f"캘리브레이션 적용됨 (dst={cal.dst_size}, {mode_3d})"
+        mode_3d = "3D contact ON" if self._tracker.has_3d_contact else "3D contact OFF (pen_ratio fallback)"
+        self._calibration_message = f"Calibration applied (dst={cal.dst_size}, {mode_3d})"
         self._calibration_message_ok = True
         if self._canvas is not None:
             self._canvas.pen_up()
@@ -532,9 +532,10 @@ class WhiteboardSession:
         )
         noise = float(np.std(touch_mm)) if len(touch_mm) > 1 else float("nan")
         separation = result.hover_median - result.touch_median
+        # 화면 오버레이에 그대로 표시되므로 ASCII로만 작성 (Hershey 폰트에 한글 글리프 없음).
         return (
-            f"3D: 영점={zero_offset:.1f}mm, 문턱={result.down_thresh - zero_offset:.1f}/"
-            f"{result.up_thresh - zero_offset:.1f}mm, 분리={separation:.1f}mm, 접촉노이즈σ={noise:.1f}mm"
+            f"3D: zero={zero_offset:.1f}mm thresh={result.down_thresh - zero_offset:.1f}/"
+            f"{result.up_thresh - zero_offset:.1f}mm sep={separation:.1f}mm noise-sigma={noise:.1f}mm"
         )
 
     def _finish_touch_calibration(self) -> None:
@@ -551,7 +552,7 @@ class WhiteboardSession:
         if contact_summary:
             parts.append(contact_summary)
         elif self._tracker.has_3d_contact:
-            failures.append("3D 높이 표본으로는 접촉/비접촉이 구분되지 않음")
+            failures.append("3D height samples don't separate contact/hover")
 
         # 2) pen_ratio 임계값 (3D가 실패했을 때의 폴백 신호이므로 항상 함께 갱신 시도).
         try:
@@ -565,7 +566,7 @@ class WhiteboardSession:
                 down_thresh=result.down_thresh, up_thresh=result.up_thresh
             )
             parts.append(
-                f"pen_ratio 임계값: down={result.down_thresh:.3f} up={result.up_thresh:.3f}"
+                f"pen_ratio thresh: down={result.down_thresh:.3f} up={result.up_thresh:.3f}"
             )
 
         self._touch_calibrating = False
@@ -577,7 +578,7 @@ class WhiteboardSession:
             self._touch_message = " | ".join(parts)
             self._touch_message_ok = True
         else:
-            self._touch_message = " / ".join(failures) or "캘리브레이션에 실패했습니다."
+            self._touch_message = " / ".join(failures) or "Calibration failed."
             self._touch_message_ok = False
             self._tracker.reset()
             return
@@ -787,11 +788,18 @@ class WhiteboardSession:
         if debug is None:
             # OpenCV의 Hershey 폰트에는 한글 글리프가 없어 ????로 깨진다 — 오버레이 문구는
             # 전부 ASCII로 쓴다(코드베이스의 다른 오버레이도 같은 규칙).
-            reason = (
-                "3D DEBUG: OFF - need 4-pt calibration + plane size + intrinsics (press K)"
-                if not self._tracker.has_3d_contact
-                else "3D DEBUG: hand pose failed this frame (falling back to pen_ratio)"
-            )
+            estimator = self._tracker.contact_estimator
+            if not self._tracker.has_3d_contact:
+                reason = "3D DEBUG: OFF - need 4-pt calibration + plane size + intrinsics (press K)"
+            elif estimator is not None and estimator.last_reprojection_error_px is not None:
+                # 문턱(기본 25px)을 얼마나 넘겼는지 보여준다 — 근소 초과면 카메라 캘리브레이션
+                # 부족, 크게 초과하면 손 자세 자체가 안 잡힌 것(가림·빠른 움직임 등)일 가능성이 높다.
+                reason = (
+                    f"3D DEBUG: hand reproj {estimator.last_reprojection_error_px:.0f}px "
+                    f"> {MAX_REPROJECTION_ERROR_PX:.0f}px threshold (falling back to pen_ratio)"
+                )
+            else:
+                reason = "3D DEBUG: hand pose solve failed this frame (falling back to pen_ratio)"
             cv2.putText(annotated, reason, (15, 30), cv2.FONT_HERSHEY_SIMPLEX,
                         0.55, _CAL_ERR_COLOR, 2, cv2.LINE_AA)
             return
@@ -938,15 +946,17 @@ class WhiteboardSession:
             cv2.circle(annotated, self._calibration_fingertip, 12, _CAL_CURSOR_COLOR, 2)
             cv2.circle(annotated, self._calibration_fingertip, 2, _CAL_CURSOR_COLOR, -1)
 
+        # 이 오버레이는 cv2.putText로 그려지므로 ASCII로만 작성한다 (Hershey 폰트에
+        # 한글 글리프가 없어 한글을 넣으면 ?????로 깨진다). 콘솔 print()는 한글 그대로 둔다.
         if not picker.is_complete:
-            guide = f"[캘리브레이션] 다음: {picker.next_label} ({picker.count}/4) — 클릭 또는 손끝 위치에서 SPACE"
+            guide = f"[CALIBRATION] next: {picker.next_label} ({picker.count}/4) - click or SPACE at fingertip"
         else:
-            guide = "[캘리브레이션] 4점 완료 — Enter/S 적용 / Z 취소 / X 리셋 / Esc 취소"
+            guide = "[CALIBRATION] 4 points done - Enter/S apply / Z undo / X reset / Esc cancel"
         # main()의 FPS 카운터가 (15,30)을 이미 쓰므로 그 아래에 그린다.
         cv2.putText(annotated, guide, (15, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.65, _CAL_TEXT_COLOR, 2, cv2.LINE_AA)
         if self._calibration_fingertip is None:
             cv2.putText(
-                annotated, "(손이 검출되지 않아 SPACE로는 찍을 수 없음 — 클릭은 가능)",
+                annotated, "(no hand detected - SPACE unavailable, click still works)",
                 (15, 85), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (150, 150, 255), 1, cv2.LINE_AA,
             )
 
@@ -966,15 +976,16 @@ class WhiteboardSession:
         if fingertip is not None:
             cv2.circle(annotated, fingertip, 12, _CAL_CURSOR_COLOR, 2)
 
+        # ASCII로만 작성 (Hershey 폰트에 한글 글리프 없음 — 위 캘리브레이션 오버레이와 동일 규칙).
         if self._touch_phase == "hover":
-            title = "[터치 캘리브레이션 1/2] 손가락을 화면 위에 띄운 채 가만히 두세요 (닿지 않게)"
+            title = "[TOUCH CAL 1/2] hold finger above the surface, still (not touching)"
         elif self._touch_phase == "touch":
-            title = "[터치 캘리브레이션 2/2] 책상에 손가락을 대고 누른 상태로 가만히(또는 천천히) 유지하세요"
+            title = "[TOUCH CAL 2/2] press finger on the surface and hold still"
         else:
-            title = "[터치 캘리브레이션]"
+            title = "[TOUCH CALIBRATION]"
         cv2.putText(annotated, title, (15, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, _CAL_TEXT_COLOR, 2, cv2.LINE_AA)
         cv2.putText(
-            annotated, "Esc 취소", (15, 85), cv2.FONT_HERSHEY_SIMPLEX, 0.55, _CAL_TEXT_COLOR, 1, cv2.LINE_AA,
+            annotated, "Esc cancel", (15, 85), cv2.FONT_HERSHEY_SIMPLEX, 0.55, _CAL_TEXT_COLOR, 1, cv2.LINE_AA,
         )
 
         # 진행률 게이지 (0~1)

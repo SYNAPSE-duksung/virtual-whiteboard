@@ -76,10 +76,11 @@ def main() -> int:
                 refined = cv2.cornerSubPix(gray, corners, (11, 11), (-1, -1), criteria)
                 cv2.drawChessboardCorners(display, pattern, refined, found)
 
-            cv2.putText(display, f"캡처 {len(img_points)}장 (권장 {RECOMMENDED_CAPTURES}장 이상)",
+            # ASCII로만 작성 (Hershey 폰트에 한글 글리프가 없어 한글은 ?????로 깨진다).
+            cv2.putText(display, f"captured {len(img_points)} (recommend {RECOMMENDED_CAPTURES}+)",
                         (15, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.7,
                         (0, 220, 60) if found else (200, 200, 200), 2, cv2.LINE_AA)
-            cv2.putText(display, "체스보드 검출됨 — SPACE로 캡처" if found else "체스보드가 보이지 않습니다",
+            cv2.putText(display, "chessboard found - SPACE to capture" if found else "chessboard not visible",
                         (15, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
                         (0, 220, 60) if found else (0, 0, 255), 2, cv2.LINE_AA)
             if message:
@@ -92,19 +93,20 @@ def main() -> int:
                 break
             if key == ord(" "):
                 if not found:
-                    message = "체스보드가 검출되지 않아 캡처할 수 없습니다."
+                    # message는 cv2.putText로만 그려지므로 ASCII로만 작성한다.
+                    message = "chessboard not detected - can't capture."
                 else:
                     obj_points.append(objp.copy())
                     img_points.append(refined)
-                    message = f"캡처 {len(img_points)}장"
+                    message = f"captured {len(img_points)}"
                     print(f"  캡처 {len(img_points)}")
             elif key == ord("z"):
                 if obj_points:
                     obj_points.pop(); img_points.pop()
-                    message = f"마지막 캡처 취소 (남은 {len(img_points)}장)"
+                    message = f"undid last capture ({len(img_points)} left)"
             elif key == ord("c"):
                 if len(img_points) < MIN_CAPTURES:
-                    message = f"최소 {MIN_CAPTURES}장이 필요합니다 (현재 {len(img_points)}장)"
+                    message = f"need at least {MIN_CAPTURES} (have {len(img_points)})"
                     continue
                 print("캘리브레이션 계산 중...")
                 rms, mtx, dist, _, _ = cv2.calibrateCamera(
@@ -124,7 +126,7 @@ def main() -> int:
                 print(f"  fx={intr.fx:.1f} fy={intr.fy:.1f} cx={intr.cx:.1f} cy={intr.cy:.1f}")
                 print(f"  화각 60° 근사값 대비 초점거리 차이: {100 * (intr.fx / approx.fx - 1):+.1f}%")
                 print("  → 이제 controller.main / tools.validate_contact3d가 이 값을 자동으로 사용합니다.")
-                message = f"저장 완료 (RMS {rms:.2f}px)"
+                message = f"saved (RMS {rms:.2f}px)"
     finally:
         camera.release()
         cv2.destroyAllWindows()
