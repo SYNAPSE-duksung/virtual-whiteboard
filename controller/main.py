@@ -17,12 +17,13 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from controller.ocr_llm_pipeline import OcrLlmPipelineWorker, PipelineResult
+from controller.ocr_llm_pipeline import STATUS_IDLE as _PIPELINE_IDLE
 from controller.state_machine import PenStateMachine
 from core.camera import DEFAULT_INTRINSICS_PATH, CameraIntrinsics
 from core.contact3d import DEFAULT_PLANE_SIZE_MM, MAX_REPROJECTION_ERROR_PX
 from core.geometry import DEFAULT_CALIBRATION_PATH, CalibrationPicker, PerspectiveCalibration
 from core.pen_tracker import PenTracker
-from core.recorder import CoordRecorder, CoordSample
 from core.touch_calibration import (
     DEFAULT_SAMPLE_SECONDS,
     TouchCalibrationError,
@@ -88,6 +89,10 @@ class SessionDebug:
     contact_down_mm: float | None = None  # 3D 접촉 문턱(내림), 3D 비활성 시 None
     contact_up_mm: float | None = None  # 3D 접촉 문턱(올림)
     zero_offset_mm: float | None = None  # 학습된 영점 (표면을 짚었을 때의 원시 높이)
+    pipeline_status: str = _PIPELINE_IDLE  # OCR/LLM 파이프라인 상태 (IDLE|RUNNING|DONE|ERROR)
+    ocr_text: str | None = None
+    corrected_text: str | None = None
+    pipeline_error: str | None = None
 
 
 class WhiteboardSession:
@@ -112,7 +117,6 @@ class WhiteboardSession:
         up_confirm_sec: float = 0.15,
         loss_tolerance_sec: float = 0.10,
         erase_confirm_sec: float = 0.25,
-        output_dir: str | Path = "output",
         calibration_path: str | Path | None = DEFAULT_CALIBRATION_PATH,
         touch_sample_seconds: float = DEFAULT_SAMPLE_SECONDS,
         intrinsics_path: str | Path | None = DEFAULT_INTRINSICS_PATH,
@@ -160,7 +164,8 @@ class WhiteboardSession:
             loss_tolerance_sec=loss_tolerance_sec,
             erase_confirm_sec=erase_confirm_sec,
         )
-        self._recorder = CoordRecorder(output_dir)
+        self._pipeline = OcrLlmPipelineWorker()
+        self._last_pipeline_result = PipelineResult(_PIPELINE_IDLE, None, None, None)
         self._line_color = line_color
         self._line_thickness = line_thickness
         self._canvas: StrokeCanvas | None = None
@@ -261,6 +266,10 @@ class WhiteboardSession:
             contact_down_mm=detector.down_mm if estimator is not None else None,
             contact_up_mm=detector.up_mm if estimator is not None else None,
             zero_offset_mm=estimator.zero_offset_mm if estimator is not None else None,
+            pipeline_status=self._last_pipeline_result.status,
+            ocr_text=self._last_pipeline_result.ocr_text,
+            corrected_text=self._last_pipeline_result.corrected_text,
+            pipeline_error=self._last_pipeline_result.error,
         )
 
     # ------------------------------------------------------------------
@@ -630,27 +639,24 @@ class WhiteboardSession:
         cv2.imwrite(str(path), self._canvas.image)
         return path
 
-    @property
-    def is_recording(self) -> bool:
-        return self._recorder.recording
+    def trigger_ocr(self) -> bool:
+        """현재 캔버스를 스냅샷해 OCR/LLM 파이프라인에 비동기로 넘긴다.
 
-    @property
-    def recording_path(self) -> Path | None:
-        return self._recorder.path
-
-    def start_recording(self) -> Path:
-        """좌표 CSV 기록을 시작하고 파일 경로를 반환한다."""
-        return self._recorder.start()
-
-    def stop_recording(self) -> None:
-        self._recorder.stop()
-
-    def toggle_recording(self) -> bool:
-        """CSV 기록을 켜고/끄고, 켜졌으면 True를 반환한다."""
-        return self._recorder.toggle()
+        캔버스가 아직 없거나(첫 프레임 이전) 이미 처리 중이면 아무것도 하지 않고
+        ``False``를 반환한다. ``StrokeCanvas.image``는 라이브 버퍼 레퍼런스이므로
+        ``.copy()``한 뒤 넘겨야 이후 그리기와 경합하지 않는다.
+        """
+        if self._canvas is None:
+            return False
+        return self._pipeline.submit(self._canvas.image.copy())
 
     def process_frame(self, bgr_frame: np.ndarray) -> np.ndarray:
         """Run tracking + stroke recording and return the annotated frame."""
+        # 모드(캘리브레이션 포함)와 무관하게 매 프레임 소비한다 — 완료된 작업이 다음
+        # trigger_ocr() 호출에 유실되지 않도록, 그리고 캘리브레이션 중에도 백그라운드
+        # 결과가 계속 반영되도록.
+        self._last_pipeline_result = self._pipeline.poll()
+
         height, width = bgr_frame.shape[:2]
         if self._last_frame_size != (width, height):
             # 실제 카메라 해상도가 확정(또는 변경)되면 intrinsics를 그 해상도로 다시 맞춘다 —
@@ -712,9 +718,6 @@ class WhiteboardSession:
                     self._canvas.pen_up()
                     self._status = "PEN UP"
 
-        # 기록 중이면 매 프레임 CSV로 남긴다 (모드 무관, 기록 중이 아니면 no-op).
-        self._recorder.write(CoordSample.from_pen_frame(result))
-
         annotated = self._canvas.overlay(bgr_frame)
         if self._calibration is not None:
             # 캘리브레이션한 필기 영역 경계를 항상 얇게 겹쳐 그려, 게이팅 기준을
@@ -734,8 +737,6 @@ class WhiteboardSession:
             cv2.LINE_AA,
         )
         mode_label = f"MODE: {self.mode_name}"
-        if self._recorder.recording:
-            mode_label += "  * REC"
         mode_label += "  CAL:OK" if self._calibration is not None else "  CAL:NONE"
         mode_label += "  3D" if self._tracker.has_3d_contact else "  2D"
         cv2.putText(
@@ -1012,7 +1013,7 @@ class WhiteboardSession:
         return annotated
 
     def close(self) -> None:
-        self._recorder.close()
+        self._pipeline.shutdown(wait=False)
         self._tracker.close()
 
     def __enter__(self) -> "WhiteboardSession":
@@ -1022,7 +1023,7 @@ class WhiteboardSession:
         self.close()
 
 
-_WINDOW_NAME = "Virtual Whiteboard - M mode / K calib / T touch-calib / SPACE pen / R rec / C clear / S save / Q quit"
+_WINDOW_NAME = "Virtual Whiteboard - M mode / K calib / T touch-calib / SPACE pen / O ocr / C clear / S save / Q quit"
 
 
 def main() -> int:
@@ -1032,6 +1033,11 @@ def main() -> int:
         "--mirror",
         action="store_true",
         help="flip the frame horizontally (selfie view; off by default for the desk view)",
+    )
+    parser.add_argument(
+        "--flip-vertical",
+        action="store_true",
+        help="flip the frame vertically (oblique webcam upside-down fix; independent of --mirror)",
     )
     parser.add_argument(
         "--calibration",
@@ -1071,12 +1077,13 @@ def main() -> int:
         print(f"카메라 {args.camera}을(를) 열 수 없습니다.")
         return 1
 
-    print("M: 모드 전환 | K: 4점 캘리브레이션 | T: 접촉 캘리브레이션(3D 영점 포함) | D: 3D 디버그 표시 | R: CSV 기록 | C: 지우기 | S: 저장 | Q: 종료")
+    print("M: 모드 전환 | K: 4점 캘리브레이션 | T: 접촉 캘리브레이션(3D 영점 포함) | D: 3D 디버그 표시 | O: OCR 트리거 | C: 지우기 | S: 저장 | Q: 종료")
     if not args.no_3d:
         print(f"[3D] 평면 실제 크기 {args.plane_size[0]:.0f}x{args.plane_size[1]:.0f}mm 가정 "
               f"— 다르면 --plane-size 로 지정하세요 (A4 가로면 그대로 두면 됩니다)")
     previous_time = time.perf_counter()
     last_touch_message: tuple[str, bool] | None = None
+    last_pipeline_status: str | None = None
     try:
         with WhiteboardSession(
             calibration_path=args.calibration,
@@ -1119,6 +1126,18 @@ def main() -> int:
                 if touch_msg is not None and touch_msg != last_touch_message:
                     print(f"[터치 캘리브레이션] {touch_msg[0]}")
                 last_touch_message = touch_msg
+
+                # 상태가 바뀔 때만 출력 (매 프레임 폴링이라 스팸 방지).
+                debug = session.debug
+                if debug.pipeline_status != last_pipeline_status:
+                    if debug.pipeline_status == "DONE":
+                        suffix = f": {debug.corrected_text}"
+                    elif debug.pipeline_status == "ERROR":
+                        suffix = f": {debug.pipeline_error}"
+                    else:
+                        suffix = ""
+                    print(f"[OCR/LLM] {debug.pipeline_status}{suffix}")
+                last_pipeline_status = debug.pipeline_status
 
                 current_time = time.perf_counter()
                 fps = 1.0 / max(current_time - previous_time, 1e-6)
@@ -1167,11 +1186,9 @@ def main() -> int:
                 elif key == ord("m"):
                     auto = session.toggle_mode()
                     print(f"모드 전환: {'자동(손끝 판정)' if auto else '수동(SPACE 펜)'}")
-                elif key == ord("r"):
-                    if session.toggle_recording():
-                        print(f"[CSV] 기록 시작: {session.recording_path}")
-                    else:
-                        print("[CSV] 기록 중지")
+                elif key == ord("o"):
+                    if not session.trigger_ocr():
+                        print("[OCR/LLM] 이전 작업 처리 중 — 잠시 후 다시 시도하세요.")
                 elif key == ord(" "):
                     session.toggle_pen()
                 elif key == ord("c"):
