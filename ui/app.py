@@ -2,10 +2,14 @@
 화이트보드 세션용 PyQt 레이아웃 골격 (2주차 범위).
 
 `controller/main.py``와 동일한 파이프라인을 Qt 창 안에서 실행합니다. 버튼/단축키로
-자동·수동 모드 전환(M)과 좌표 CSV 기록(R)을 제어한다.
+자동·수동 모드 전환(M)과 OCR 트리거(O)를 제어한다.
 우측 열에는 캔버스 소형 미리보기와 pen_ratio 디버그 패널(RatioBar)을 표시한다.
 
-5주차 스캐폴딩에서 QThread 워커를 추가할 예정입니다. 그때까지는 이 파일을 렌더링 전용으로 사용합니다(llm/ocr 호출x)
+OCR/LLM 백그라운드 처리는 `controller.ocr_llm_pipeline.OcrLlmPipelineWorker`
+(ThreadPoolExecutor 기반)가 담당한다. `WhiteboardSession`은 OpenCV 데모와 공유되는
+UI-독립 엔트리포인트라 QThread 대신 스레드 세이프 폴링 방식을 쓴다 — 워커 스레드는
+Qt 위젯을 건드리지 않고, `_update_frame()`이 GUI 스레드에서 `session.debug`(plain
+dataclass)만 매 틱 읽는다.
 
 실행 명령어: `python -m ui.app`
 """
@@ -129,6 +133,7 @@ class WhiteboardWindow(QMainWindow):
         self._ratio_bar = RatioBar()
         self._status_label1 = QLabel("상태: -")
         self._status_label2 = QLabel("손 미검출")
+        self._pipeline_label = QLabel("OCR/LLM: 대기")
 
         right_panel = QWidget()
         right_panel.setFixedWidth(300)
@@ -138,6 +143,7 @@ class WhiteboardWindow(QMainWindow):
         right_layout.addWidget(self._ratio_bar)
         right_layout.addWidget(self._status_label1)
         right_layout.addWidget(self._status_label2)
+        right_layout.addWidget(self._pipeline_label)
         right_layout.addStretch(1)
         right_panel.setLayout(right_layout)
         self._right_panel = right_panel
@@ -152,9 +158,8 @@ class WhiteboardWindow(QMainWindow):
         self._pen_button.setEnabled(not self._session.auto_mode)  # 수동 모드에서만
         self._pen_button.toggled.connect(self._session.set_pen_down)
 
-        self._record_button = QPushButton()
-        self._record_button.setCheckable(True)
-        self._record_button.toggled.connect(self._on_record_toggled)
+        self._ocr_button = QPushButton("OCR 트리거 (O)")
+        self._ocr_button.clicked.connect(self._on_ocr_clicked)
 
         # 3D 접촉 판정 근거(평면 수선 벡터·높이 게이지·수치)를 영상 위에 겹쳐 본다.
         self._debug3d_button = QPushButton("3D 디버그 (D)")
@@ -170,13 +175,12 @@ class WhiteboardWindow(QMainWindow):
         quit_button.clicked.connect(self.close)
 
         self._refresh_mode_button()
-        self._refresh_record_button()
 
         buttons = QHBoxLayout()
         for button in (
             self._mode_button,
             self._pen_button,
-            self._record_button,
+            self._ocr_button,
             self._debug3d_button,
             clear_button,
             save_button,
@@ -208,8 +212,8 @@ class WhiteboardWindow(QMainWindow):
                 self._pen_button.toggle()
         elif event.key() == Qt.Key.Key_M:
             self._mode_button.toggle()
-        elif event.key() == Qt.Key.Key_R:
-            self._record_button.toggle()
+        elif event.key() == Qt.Key.Key_O:
+            self._on_ocr_clicked()
         elif event.key() == Qt.Key.Key_D:
             self._debug3d_button.toggle()
         else:
@@ -226,17 +230,9 @@ class WhiteboardWindow(QMainWindow):
     def _refresh_mode_button(self) -> None:
         self._mode_button.setText(f"모드: {self._session.mode_name} (M)")
 
-    def _on_record_toggled(self, on: bool) -> None:
-        if on:
-            path = self._session.start_recording()
-            self.statusBar().showMessage(f"CSV 기록 시작: {path}")
-        else:
-            self._session.stop_recording()
-            self.statusBar().showMessage("CSV 기록 중지")
-        self._refresh_record_button()
-
-    def _refresh_record_button(self) -> None:
-        self._record_button.setText("기록 중지 (R)" if self._session.is_recording else "기록 (R)")
+    def _on_ocr_clicked(self) -> None:
+        if not self._session.trigger_ocr():
+            self.statusBar().showMessage("이전 작업 처리 중 — 잠시 후 다시 시도하세요.")
 
     def _update_frame(self) -> None:
         ok, frame = self._camera.read()
@@ -250,8 +246,6 @@ class WhiteboardWindow(QMainWindow):
 
         annotated = self._session.process_frame(frame)
         status = f"[{self._session.mode_name}] {self._session.status}"
-        if self._session.is_recording:
-            status += "  ● REC"
         self.statusBar().showMessage(status)
 
         rgb = cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB)
@@ -269,6 +263,7 @@ class WhiteboardWindow(QMainWindow):
         debug = self._session.debug
         self._ratio_bar.set_debug(debug)
         self._update_debug_labels(debug)
+        self._update_pipeline_label(debug)
 
     def _update_canvas_view(self) -> None:
         canvas = self._session.canvas
@@ -314,6 +309,20 @@ class WhiteboardWindow(QMainWindow):
             self._status_label2.setStyleSheet(
                 "color: #1a8a3c;" if debug.stable_pen_down else "color: #555555;"
             )
+
+    def _update_pipeline_label(self, debug: SessionDebug) -> None:
+        if debug.pipeline_status == "RUNNING":
+            self._pipeline_label.setText("OCR/LLM: 처리 중...")
+            self._pipeline_label.setStyleSheet("color: #cc7a00;")
+        elif debug.pipeline_status == "DONE":
+            self._pipeline_label.setText(f"OCR/LLM: 완료 — {debug.corrected_text}")
+            self._pipeline_label.setStyleSheet("color: #1a8a3c;")
+        elif debug.pipeline_status == "ERROR":
+            self._pipeline_label.setText(f"OCR/LLM: 오류 — {debug.pipeline_error}")
+            self._pipeline_label.setStyleSheet("color: #cc2222;")
+        else:
+            self._pipeline_label.setText("OCR/LLM: 대기")
+            self._pipeline_label.setStyleSheet("color: #333333;")
 
     def _save_canvas(self) -> None:
         saved = self._session.save_canvas(
