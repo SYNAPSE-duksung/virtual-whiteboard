@@ -196,6 +196,7 @@ class WhiteboardWindow(QMainWindow):
             self._save_button,
             quit_button,
         ):
+            button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             buttons.addWidget(button)
 
         top_layout = QHBoxLayout()
