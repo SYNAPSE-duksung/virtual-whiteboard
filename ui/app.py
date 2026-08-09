@@ -2,7 +2,7 @@
 화이트보드 세션용 PyQt 레이아웃 골격 (2주차 범위).
 
 `controller/main.py``와 동일한 파이프라인을 Qt 창 안에서 실행합니다. 버튼/단축키로
-자동·수동 모드 전환(M)과 OCR 트리거(O)를 제어한다.
+자동·수동 모드 전환(M), OCR 트리거(O), 4점 캘리브레이션(K)·접촉 캘리브레이션(T)을 제어한다.
 우측 열에는 캔버스 소형 미리보기와 pen_ratio 디버그 패널(RatioBar)을 표시한다.
 
 OCR/LLM 백그라운드 처리는 `controller.ocr_llm_pipeline.OcrLlmPipelineWorker`
@@ -34,7 +34,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from controller.main import SessionDebug, WhiteboardSession
+from controller.session import SessionDebug, WhiteboardSession
 
 _FRAME_INTERVAL_MS = 33  # ~30 fps
 
@@ -134,6 +134,7 @@ class WhiteboardWindow(QMainWindow):
         self._status_label1 = QLabel("상태: -")
         self._status_label2 = QLabel("손 미검출")
         self._pipeline_label = QLabel("OCR/LLM: 대기")
+        self._calibration_label = QLabel("")
 
         right_panel = QWidget()
         right_panel.setFixedWidth(300)
@@ -144,6 +145,7 @@ class WhiteboardWindow(QMainWindow):
         right_layout.addWidget(self._status_label1)
         right_layout.addWidget(self._status_label2)
         right_layout.addWidget(self._pipeline_label)
+        right_layout.addWidget(self._calibration_label)
         right_layout.addStretch(1)
         right_panel.setLayout(right_layout)
         self._right_panel = right_panel
@@ -161,16 +163,22 @@ class WhiteboardWindow(QMainWindow):
         self._ocr_button = QPushButton("OCR 트리거 (O)")
         self._ocr_button.clicked.connect(self._on_ocr_clicked)
 
+        self._cal_button = QPushButton("캘리브레이션 (K)")
+        self._cal_button.clicked.connect(self._on_calibrate_clicked)
+
+        self._touch_cal_button = QPushButton("접촉 캘리브레이션 (T)")
+        self._touch_cal_button.clicked.connect(self._on_touch_calibrate_clicked)
+
         # 3D 접촉 판정 근거(평면 수선 벡터·높이 게이지·수치)를 영상 위에 겹쳐 본다.
         self._debug3d_button = QPushButton("3D 디버그 (D)")
         self._debug3d_button.setCheckable(True)
         self._debug3d_button.setChecked(self._session.debug_3d)
         self._debug3d_button.toggled.connect(self._session.set_debug_3d)
 
-        clear_button = QPushButton("지우기")
-        clear_button.clicked.connect(self._session.clear)
-        save_button = QPushButton("저장")
-        save_button.clicked.connect(self._save_canvas)
+        self._clear_button = QPushButton("지우기")
+        self._clear_button.clicked.connect(self._session.clear)
+        self._save_button = QPushButton("저장")
+        self._save_button.clicked.connect(self._save_canvas)
         quit_button = QPushButton("종료")
         quit_button.clicked.connect(self.close)
 
@@ -181,9 +189,11 @@ class WhiteboardWindow(QMainWindow):
             self._mode_button,
             self._pen_button,
             self._ocr_button,
+            self._cal_button,
+            self._touch_cal_button,
             self._debug3d_button,
-            clear_button,
-            save_button,
+            self._clear_button,
+            self._save_button,
             quit_button,
         ):
             buttons.addWidget(button)
@@ -204,7 +214,37 @@ class WhiteboardWindow(QMainWindow):
         self._timer.timeout.connect(self._update_frame)
         self._timer.start(_FRAME_INTERVAL_MS)
 
+        if self._session.needs_calibration:
+            # 세션 시작 시 유효한 캘리브레이션이 없으면(최초 실행) 1회 강제한다 —
+            # OpenCV 데모(controller/main.py)의 동일 로직과 맞춘다.
+            self._session.start_calibration()
+            self.statusBar().showMessage(
+                "저장된 캘리브레이션이 없어 최초 지정을 시작합니다 — "
+                "손끝을 모서리에 놓고 SPACE (TL→TR→BR→BL)"
+            )
+        self._refresh_calibration_controls()
+
     def keyPressEvent(self, event) -> None:  # noqa: N802 (Qt naming)
+        if self._session.is_calibrating:
+            if event.key() == Qt.Key.Key_Z:
+                self._session.undo_calibration_point()
+            elif event.key() == Qt.Key.Key_X:
+                self._session.reset_calibration_points()
+            elif event.key() == Qt.Key.Key_Space:
+                if not self._session.add_calibration_point_at_fingertip():
+                    self.statusBar().showMessage("손이 검출되지 않아 점을 찍을 수 없습니다.")
+            elif event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_S):
+                self._session.confirm_calibration()
+                self._refresh_calibration_controls()
+            elif event.key() == Qt.Key.Key_Escape and self._session.has_calibration:
+                self._session.cancel_calibration()
+                self._refresh_calibration_controls()
+            return
+        if self._session.is_touch_calibrating:
+            if event.key() == Qt.Key.Key_Escape:
+                self._session.cancel_touch_calibration()
+                self._refresh_calibration_controls()
+            return
         if event.key() == Qt.Key.Key_Space:
             # 자동 모드에서는 펜 버튼이 비활성화되어 있으므로 토글하지 않는다
             # (비활성 버튼도 프로그램 호출로는 토글되어 수동 복귀 시 상태가 어긋난다).
@@ -216,6 +256,10 @@ class WhiteboardWindow(QMainWindow):
             self._on_ocr_clicked()
         elif event.key() == Qt.Key.Key_D:
             self._debug3d_button.toggle()
+        elif event.key() == Qt.Key.Key_K:
+            self._on_calibrate_clicked()
+        elif event.key() == Qt.Key.Key_T:
+            self._on_touch_calibrate_clicked()
         else:
             super().keyPressEvent(event)
 
@@ -233,6 +277,30 @@ class WhiteboardWindow(QMainWindow):
     def _on_ocr_clicked(self) -> None:
         if not self._session.trigger_ocr():
             self.statusBar().showMessage("이전 작업 처리 중 — 잠시 후 다시 시도하세요.")
+
+    def _on_calibrate_clicked(self) -> None:
+        self._session.start_calibration()
+        self._refresh_calibration_controls()
+
+    def _on_touch_calibrate_clicked(self) -> None:
+        self._session.start_touch_calibration()
+        self._refresh_calibration_controls()
+
+    def _refresh_calibration_controls(self) -> None:
+        """캘리브레이션/터치캘리브레이션 진행 중이면 나머지 컨트롤을 잠근다.
+
+        OpenCV 데모의 배타적 key 분기(캘리브레이션 중엔 다른 키가 먹히지 않음)와
+        동일한 효과를 버튼에도 적용한다.
+        """
+        busy = self._session.is_calibrating or self._session.is_touch_calibrating
+        self._cal_button.setEnabled(not busy)
+        self._touch_cal_button.setEnabled(not busy)
+        self._mode_button.setEnabled(not busy)
+        self._ocr_button.setEnabled(not busy)
+        self._debug3d_button.setEnabled(not busy)
+        self._clear_button.setEnabled(not busy)
+        self._save_button.setEnabled(not busy)
+        self._pen_button.setEnabled(not busy and not self._session.auto_mode)
 
     def _update_frame(self) -> None:
         ok, frame = self._camera.read()
@@ -264,6 +332,7 @@ class WhiteboardWindow(QMainWindow):
         self._ratio_bar.set_debug(debug)
         self._update_debug_labels(debug)
         self._update_pipeline_label(debug)
+        self._update_calibration_label()
 
     def _update_canvas_view(self) -> None:
         canvas = self._session.canvas
@@ -323,6 +392,29 @@ class WhiteboardWindow(QMainWindow):
         else:
             self._pipeline_label.setText("OCR/LLM: 대기")
             self._pipeline_label.setStyleSheet("color: #333333;")
+
+    def _update_calibration_label(self) -> None:
+        if self._session.is_calibrating:
+            picker = self._session.calibration_picker
+            if picker is not None and not picker.is_complete:
+                text = f"[캘리브레이션] 다음: {picker.next_label} ({picker.count}/4) — 손끝+SPACE"
+            else:
+                text = "[캘리브레이션] 4점 완료 — Enter/S 적용 · Z 취소 · X 리셋 · Esc 취소"
+            color = "#333333"
+        elif self._session.is_touch_calibrating:
+            phase_label = "1/2 hover (띄우기)" if self._session.touch_phase == "hover" else "2/2 touch (누르기)"
+            text = f"[접촉 캘리브레이션] {phase_label} — {self._session.touch_progress * 100:.0f}% (Esc 취소)"
+            color = "#333333"
+        else:
+            msg = self._session.calibration_message or self._session.touch_message
+            if msg is not None:
+                text, ok = msg
+                color = "#1a8a3c" if ok else "#cc2222"
+            else:
+                text = "캘리브레이션: 저장됨" if self._session.has_calibration else "캘리브레이션: 없음"
+                color = "#333333"
+        self._calibration_label.setText(text)
+        self._calibration_label.setStyleSheet(f"color: {color};")
 
     def _save_canvas(self) -> None:
         saved = self._session.save_canvas(
