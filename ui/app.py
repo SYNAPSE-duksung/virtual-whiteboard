@@ -26,6 +26,7 @@ from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QCloseEvent, QColor, QImage, QPainter, QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QMainWindow,
@@ -38,6 +39,28 @@ from controller.session import SessionDebug, WhiteboardSession
 from core.contact3d import MAX_REPROJECTION_ERROR_PX
 
 _FRAME_INTERVAL_MS = 33  # ~30 fps
+
+# 전체화면/큰 창에서도 읽히도록 우측 패널 글자 크기를 기본 Qt 폰트보다 키운다.
+_LABEL_FONT_PX = 14
+_DEBUG3D_FONT_PX = 13
+
+
+def _status_style(color: str) -> str:
+    """상태 라벨(상태/손/OCR/캘리브레이션)용 스타일 — 항상 폰트 크기를 포함한다.
+
+    라벨마다 색만 다르게 여러 곳(_update_debug_labels 등)에서 setStyleSheet를 새로
+    호출하는데, 매번 이 헬퍼를 거치게 해서 font-size가 누락되는 일을 막는다.
+    """
+    return f"font-size: {_LABEL_FONT_PX}px; color: {color};"
+
+
+def _debug3d_style(color: str) -> str:
+    """3D 디버그 카드 라벨용 스타일 — 배경/테두리를 포함해 위 라벨들과 구분되어 보이게 한다."""
+    return (
+        f"font-family: Consolas, 'DejaVu Sans Mono', monospace; font-size: {_DEBUG3D_FONT_PX}px;"
+        f" color: {color}; background-color: #f2f2f2; border: 1px solid #ddd;"
+        " border-radius: 4px; padding: 6px;"
+    )
 
 # RatioBar가 pen_ratio를 x 픽셀로 매핑할 때 쓰는 기본 표시 범위.
 _RATIO_RANGE_LO = 0.0
@@ -138,17 +161,23 @@ class WhiteboardWindow(QMainWindow):
         self._status_label2 = QLabel("손 미검출")
         self._pipeline_label = QLabel("OCR/LLM: 대기")
         self._calibration_label = QLabel("")
+        for label in (self._status_label1, self._status_label2, self._pipeline_label,
+                      self._calibration_label):
+            label.setWordWrap(True)
+            label.setStyleSheet(_status_style("#333333"))
 
         # 3D 디버그 수치 패널 — 영상 위에 굽는 대신 여기 모노스페이스 라벨로 표시한다
-        # (3D 디버그가 꺼져 있으면 빈 문자열, _update_debug3d_label()이 채운다).
+        # (3D 디버그가 꺼져 있으면 빈 문자열, _update_debug3d_label()이 채운다). 위쪽
+        # 라벨들과 붙어서 한 덩어리로 보이지 않도록 구분선 + 카드형 배경을 둔다.
+        self._debug3d_separator = QFrame()
+        self._debug3d_separator.setFrameShape(QFrame.Shape.HLine)
+        self._debug3d_separator.setStyleSheet("color: #ccc; margin-top: 6px;")
         self._debug3d_label = QLabel("")
         self._debug3d_label.setWordWrap(True)
-        self._debug3d_label.setStyleSheet(
-            "font-family: Consolas, 'DejaVu Sans Mono', monospace; font-size: 11px; color: #333333;"
-        )
+        self._debug3d_label.setStyleSheet(_debug3d_style("#333333"))
 
         right_panel = QWidget()
-        right_panel.setFixedWidth(300)
+        right_panel.setMinimumWidth(320)
         right_layout = QVBoxLayout()
         right_layout.addWidget(canvas_title)
         right_layout.addWidget(self._canvas_view)
@@ -157,6 +186,7 @@ class WhiteboardWindow(QMainWindow):
         right_layout.addWidget(self._status_label2)
         right_layout.addWidget(self._pipeline_label)
         right_layout.addWidget(self._calibration_label)
+        right_layout.addWidget(self._debug3d_separator)
         right_layout.addWidget(self._debug3d_label)
         right_layout.addStretch(1)
         right_panel.setLayout(right_layout)
@@ -218,8 +248,8 @@ class WhiteboardWindow(QMainWindow):
             buttons.addWidget(button)
 
         top_layout = QHBoxLayout()
-        top_layout.addWidget(self._video, stretch=1)
-        top_layout.addWidget(self._right_panel, stretch=0)
+        top_layout.addWidget(self._video, stretch=3)
+        top_layout.addWidget(self._right_panel, stretch=1)
 
         layout = QVBoxLayout()
         layout.addLayout(top_layout, stretch=1)
@@ -378,15 +408,15 @@ class WhiteboardWindow(QMainWindow):
             status_text += f" ({debug.pending})"
         self._status_label1.setText(status_text)
         if debug.status == "PEN DOWN":
-            self._status_label1.setStyleSheet("color: #1a8a3c;")
+            self._status_label1.setStyleSheet(_status_style("#1a8a3c"))
         elif debug.status in ("HAND LOST", "ERASE"):
-            self._status_label1.setStyleSheet("color: #cc7a00;")
+            self._status_label1.setStyleSheet(_status_style("#cc7a00"))
         else:
-            self._status_label1.setStyleSheet("color: #333333;")
+            self._status_label1.setStyleSheet(_status_style("#333333"))
 
         if not debug.hand_detected:
             self._status_label2.setText("손 미검출")
-            self._status_label2.setStyleSheet("color: #cc7a00;")
+            self._status_label2.setStyleSheet(_status_style("#cc7a00"))
         else:
             instant = "DOWN" if debug.instant_pen_down else "UP"
             stable = "DOWN" if debug.stable_pen_down else "UP"
@@ -396,22 +426,22 @@ class WhiteboardWindow(QMainWindow):
                 text += f"  |  높이 {debug.height_mm:+.1f}mm"
             self._status_label2.setText(text)
             self._status_label2.setStyleSheet(
-                "color: #1a8a3c;" if debug.stable_pen_down else "color: #555555;"
+                _status_style("#1a8a3c" if debug.stable_pen_down else "#555555")
             )
 
     def _update_pipeline_label(self, debug: SessionDebug) -> None:
         if debug.pipeline_status == "RUNNING":
             self._pipeline_label.setText("OCR/LLM: 처리 중...")
-            self._pipeline_label.setStyleSheet("color: #cc7a00;")
+            self._pipeline_label.setStyleSheet(_status_style("#cc7a00"))
         elif debug.pipeline_status == "DONE":
             self._pipeline_label.setText(f"OCR/LLM: 완료 — {debug.corrected_text}")
-            self._pipeline_label.setStyleSheet("color: #1a8a3c;")
+            self._pipeline_label.setStyleSheet(_status_style("#1a8a3c"))
         elif debug.pipeline_status == "ERROR":
             self._pipeline_label.setText(f"OCR/LLM: 오류 — {debug.pipeline_error}")
-            self._pipeline_label.setStyleSheet("color: #cc2222;")
+            self._pipeline_label.setStyleSheet(_status_style("#cc2222"))
         else:
             self._pipeline_label.setText("OCR/LLM: 대기")
-            self._pipeline_label.setStyleSheet("color: #333333;")
+            self._pipeline_label.setStyleSheet(_status_style("#333333"))
 
     def _update_calibration_label(self) -> None:
         if self._session.is_calibrating:
@@ -434,7 +464,7 @@ class WhiteboardWindow(QMainWindow):
                 text = "캘리브레이션: 저장됨" if self._session.has_calibration else "캘리브레이션: 없음"
                 color = "#333333"
         self._calibration_label.setText(text)
-        self._calibration_label.setStyleSheet(f"color: {color};")
+        self._calibration_label.setStyleSheet(_status_style(color))
 
     def _update_debug3d_label(self, debug: SessionDebug) -> None:
         """controller/overlay.py의 draw_3d_debug() 우상단 패널과 같은 정보를 Qt 라벨로.
@@ -457,9 +487,7 @@ class WhiteboardWindow(QMainWindow):
             else:
                 reason = "3D DEBUG: 이번 프레임 자세 추정 실패\n(pen_ratio로 폴백)"
             self._debug3d_label.setText(reason)
-            self._debug3d_label.setStyleSheet(
-                "font-family: Consolas, 'DejaVu Sans Mono', monospace; font-size: 11px; color: #cc2222;"
-            )
+            self._debug3d_label.setStyleSheet(_debug3d_style("#cc2222"))
             return
 
         plane_w, plane_h = debug.plane_size_mm or (0.0, 0.0)
@@ -487,9 +515,7 @@ class WhiteboardWindow(QMainWindow):
         ]
         self._debug3d_label.setText("\n".join(lines))
         color = "#cc2222" if inside is False else "#333333"
-        self._debug3d_label.setStyleSheet(
-            f"font-family: Consolas, 'DejaVu Sans Mono', monospace; font-size: 11px; color: {color};"
-        )
+        self._debug3d_label.setStyleSheet(_debug3d_style(color))
 
     def _save_canvas(self) -> None:
         saved = self._session.save_canvas(
