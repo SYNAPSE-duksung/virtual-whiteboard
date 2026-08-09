@@ -1,0 +1,241 @@
+﻿image,preprocess,text_threshold,mag_ratio,contrast_ths,decoder,predicted_text,avg_confidence,cer,elapsed_sec
+easyOCR_testimg\img_001_3px.png,gray,0.5,1.0,0.1,greedy,기 (VC,0.379,N/A,2.071
+easyOCR_testimg\img_001_3px.png,gray,0.5,1.0,0.1,beamsearch,기 (VC,0.379,N/A,2.319
+easyOCR_testimg\img_001_3px.png,gray,0.5,1.0,0.3,greedy,기 (VC,0.379,N/A,2.205
+easyOCR_testimg\img_001_3px.png,gray,0.5,1.0,0.3,beamsearch,기 (VC,0.379,N/A,2.304
+easyOCR_testimg\img_001_3px.png,gray,0.5,1.8,0.1,greedy,VV(,0.6363,N/A,7.135
+easyOCR_testimg\img_001_3px.png,gray,0.5,1.8,0.1,beamsearch,VV(,0.6363,N/A,6.242
+easyOCR_testimg\img_001_3px.png,gray,0.5,1.8,0.3,greedy,VV(,0.6363,N/A,6.247
+easyOCR_testimg\img_001_3px.png,gray,0.5,1.8,0.3,beamsearch,VV(,0.6363,N/A,6.065
+easyOCR_testimg\img_001_3px.png,gray,0.7,1.0,0.1,greedy,기,0.1046,N/A,2.08
+easyOCR_testimg\img_001_3px.png,gray,0.7,1.0,0.1,beamsearch,기,0.1046,N/A,2.026
+easyOCR_testimg\img_001_3px.png,gray,0.7,1.0,0.3,greedy,기,0.1046,N/A,1.942
+easyOCR_testimg\img_001_3px.png,gray,0.7,1.0,0.3,beamsearch,기,0.1046,N/A,2.253
+easyOCR_testimg\img_001_3px.png,gray,0.7,1.8,0.1,greedy,VV(,0.6363,N/A,6.82
+easyOCR_testimg\img_001_3px.png,gray,0.7,1.8,0.1,beamsearch,VV(,0.6363,N/A,6.384
+easyOCR_testimg\img_001_3px.png,gray,0.7,1.8,0.3,greedy,VV(,0.6363,N/A,6.048
+easyOCR_testimg\img_001_3px.png,gray,0.7,1.8,0.3,beamsearch,VV(,0.6363,N/A,6.166
+easyOCR_testimg\img_001_3px.png,clahe,0.5,1.0,0.1,greedy,기 (VC,0.4087,N/A,1.997
+easyOCR_testimg\img_001_3px.png,clahe,0.5,1.0,0.1,beamsearch,기 (VC,0.4087,N/A,2.127
+easyOCR_testimg\img_001_3px.png,clahe,0.5,1.0,0.3,greedy,기 (VC,0.4087,N/A,2.236
+easyOCR_testimg\img_001_3px.png,clahe,0.5,1.0,0.3,beamsearch,기 (VC,0.4087,N/A,2.362
+easyOCR_testimg\img_001_3px.png,clahe,0.5,1.8,0.1,greedy,VV(),0.1002,N/A,6.166
+easyOCR_testimg\img_001_3px.png,clahe,0.5,1.8,0.1,beamsearch,VV(),0.1002,N/A,6.454
+easyOCR_testimg\img_001_3px.png,clahe,0.5,1.8,0.3,greedy,VV(),0.1002,N/A,6.118
+easyOCR_testimg\img_001_3px.png,clahe,0.5,1.8,0.3,beamsearch,VV(),0.1002,N/A,6.437
+easyOCR_testimg\img_001_3px.png,clahe,0.7,1.0,0.1,greedy,기 V(,0.346,N/A,2.367
+easyOCR_testimg\img_001_3px.png,clahe,0.7,1.0,0.1,beamsearch,기 V(,0.346,N/A,2.329
+easyOCR_testimg\img_001_3px.png,clahe,0.7,1.0,0.3,greedy,기 V(,0.346,N/A,1.954
+easyOCR_testimg\img_001_3px.png,clahe,0.7,1.0,0.3,beamsearch,기 V(,0.346,N/A,2.222
+easyOCR_testimg\img_001_3px.png,clahe,0.7,1.8,0.1,greedy,VV(),0.1002,N/A,6.887
+easyOCR_testimg\img_001_3px.png,clahe,0.7,1.8,0.1,beamsearch,VV(),0.1002,N/A,6.387
+easyOCR_testimg\img_001_3px.png,clahe,0.7,1.8,0.3,greedy,VV(),0.1002,N/A,6.852
+easyOCR_testimg\img_001_3px.png,clahe,0.7,1.8,0.3,beamsearch,VV(),0.1002,N/A,7.011
+easyOCR_testimg\img_001_3px.png,adaptive_thresh,0.5,1.0,0.1,greedy,기 (VC,0.379,N/A,2.445
+easyOCR_testimg\img_001_3px.png,adaptive_thresh,0.5,1.0,0.1,beamsearch,기 (VC,0.379,N/A,2.184
+easyOCR_testimg\img_001_3px.png,adaptive_thresh,0.5,1.0,0.3,greedy,기 (VC,0.379,N/A,2.028
+easyOCR_testimg\img_001_3px.png,adaptive_thresh,0.5,1.0,0.3,beamsearch,기 (VC,0.379,N/A,2.456
+easyOCR_testimg\img_001_3px.png,adaptive_thresh,0.5,1.8,0.1,greedy,VV(,0.6363,N/A,6.533
+easyOCR_testimg\img_001_3px.png,adaptive_thresh,0.5,1.8,0.1,beamsearch,VV(,0.6363,N/A,6.523
+easyOCR_testimg\img_001_3px.png,adaptive_thresh,0.5,1.8,0.3,greedy,VV(,0.6363,N/A,7.043
+easyOCR_testimg\img_001_3px.png,adaptive_thresh,0.5,1.8,0.3,beamsearch,VV(,0.6363,N/A,6.313
+easyOCR_testimg\img_001_3px.png,adaptive_thresh,0.7,1.0,0.1,greedy,기,0.1046,N/A,2.086
+easyOCR_testimg\img_001_3px.png,adaptive_thresh,0.7,1.0,0.1,beamsearch,기,0.1046,N/A,2.208
+easyOCR_testimg\img_001_3px.png,adaptive_thresh,0.7,1.0,0.3,greedy,기,0.1046,N/A,2.114
+easyOCR_testimg\img_001_3px.png,adaptive_thresh,0.7,1.0,0.3,beamsearch,기,0.1046,N/A,2.159
+easyOCR_testimg\img_001_3px.png,adaptive_thresh,0.7,1.8,0.1,greedy,VV(,0.6363,N/A,6.944
+easyOCR_testimg\img_001_3px.png,adaptive_thresh,0.7,1.8,0.1,beamsearch,VV(,0.6363,N/A,6.465
+easyOCR_testimg\img_001_3px.png,adaptive_thresh,0.7,1.8,0.3,greedy,VV(,0.6363,N/A,6.881
+easyOCR_testimg\img_001_3px.png,adaptive_thresh,0.7,1.8,0.3,beamsearch,VV(,0.6363,N/A,6.526
+easyOCR_testimg\img_001_3px.png,denoise_otsu,0.5,1.0,0.1,greedy,기 (VC,0.379,N/A,2.105
+easyOCR_testimg\img_001_3px.png,denoise_otsu,0.5,1.0,0.1,beamsearch,기 (VC,0.379,N/A,2.091
+easyOCR_testimg\img_001_3px.png,denoise_otsu,0.5,1.0,0.3,greedy,기 (VC,0.379,N/A,2.18
+easyOCR_testimg\img_001_3px.png,denoise_otsu,0.5,1.0,0.3,beamsearch,기 (VC,0.379,N/A,2.381
+easyOCR_testimg\img_001_3px.png,denoise_otsu,0.5,1.8,0.1,greedy,VV(,0.6363,N/A,6.519
+easyOCR_testimg\img_001_3px.png,denoise_otsu,0.5,1.8,0.1,beamsearch,VV(,0.6363,N/A,6.949
+easyOCR_testimg\img_001_3px.png,denoise_otsu,0.5,1.8,0.3,greedy,VV(,0.6363,N/A,6.938
+easyOCR_testimg\img_001_3px.png,denoise_otsu,0.5,1.8,0.3,beamsearch,VV(,0.6363,N/A,6.759
+easyOCR_testimg\img_001_3px.png,denoise_otsu,0.7,1.0,0.1,greedy,기,0.1046,N/A,2.073
+easyOCR_testimg\img_001_3px.png,denoise_otsu,0.7,1.0,0.1,beamsearch,기,0.1046,N/A,2.204
+easyOCR_testimg\img_001_3px.png,denoise_otsu,0.7,1.0,0.3,greedy,기,0.1046,N/A,2.087
+easyOCR_testimg\img_001_3px.png,denoise_otsu,0.7,1.0,0.3,beamsearch,기,0.1046,N/A,2.341
+easyOCR_testimg\img_001_3px.png,denoise_otsu,0.7,1.8,0.1,greedy,VV(,0.6363,N/A,6.255
+easyOCR_testimg\img_001_3px.png,denoise_otsu,0.7,1.8,0.1,beamsearch,VV(,0.6363,N/A,7.505
+easyOCR_testimg\img_001_3px.png,denoise_otsu,0.7,1.8,0.3,greedy,VV(,0.6363,N/A,6.87
+easyOCR_testimg\img_001_3px.png,denoise_otsu,0.7,1.8,0.3,beamsearch,VV(,0.6363,N/A,6.735
+easyOCR_testimg\img_001_3px.png,upscale_2x,0.5,1.0,0.1,greedy,(,0.1225,N/A,8.28
+easyOCR_testimg\img_001_3px.png,upscale_2x,0.5,1.0,0.1,beamsearch,(,0.1225,N/A,9.794
+easyOCR_testimg\img_001_3px.png,upscale_2x,0.5,1.0,0.3,greedy,(,0.1225,N/A,9.737
+easyOCR_testimg\img_001_3px.png,upscale_2x,0.5,1.0,0.3,beamsearch,(,0.1225,N/A,8.251
+easyOCR_testimg\img_001_3px.png,upscale_2x,0.5,1.8,0.1,greedy,(V,0.4213,N/A,10.089
+easyOCR_testimg\img_001_3px.png,upscale_2x,0.5,1.8,0.1,beamsearch,(V,0.4213,N/A,10.779
+easyOCR_testimg\img_001_3px.png,upscale_2x,0.5,1.8,0.3,greedy,(V,0.4213,N/A,10.899
+easyOCR_testimg\img_001_3px.png,upscale_2x,0.5,1.8,0.3,beamsearch,(V,0.4213,N/A,10.114
+easyOCR_testimg\img_001_3px.png,upscale_2x,0.7,1.0,0.1,greedy,(,0.1225,N/A,7.685
+easyOCR_testimg\img_001_3px.png,upscale_2x,0.7,1.0,0.1,beamsearch,(,0.1225,N/A,8.206
+easyOCR_testimg\img_001_3px.png,upscale_2x,0.7,1.0,0.3,greedy,(,0.1225,N/A,8.264
+easyOCR_testimg\img_001_3px.png,upscale_2x,0.7,1.0,0.3,beamsearch,(,0.1225,N/A,8.347
+easyOCR_testimg\img_001_3px.png,upscale_2x,0.7,1.8,0.1,greedy,(V,0.4213,N/A,10.28
+easyOCR_testimg\img_001_3px.png,upscale_2x,0.7,1.8,0.1,beamsearch,(V,0.4213,N/A,10.965
+easyOCR_testimg\img_001_3px.png,upscale_2x,0.7,1.8,0.3,greedy,(V,0.4213,N/A,11.22
+easyOCR_testimg\img_001_3px.png,upscale_2x,0.7,1.8,0.3,beamsearch,(V,0.4213,N/A,11.076
+easyOCR_testimg\img_002_42px.png,gray,0.5,1.0,0.1,greedy,안녕,0.9987,N/A,2.423
+easyOCR_testimg\img_002_42px.png,gray,0.5,1.0,0.1,beamsearch,안녕,0.9987,N/A,1.939
+easyOCR_testimg\img_002_42px.png,gray,0.5,1.0,0.3,greedy,안녕,0.9987,N/A,2.141
+easyOCR_testimg\img_002_42px.png,gray,0.5,1.0,0.3,beamsearch,안녕,0.9987,N/A,2.091
+easyOCR_testimg\img_002_42px.png,gray,0.5,1.8,0.1,greedy,아 1  '  ' 0,0.3457,N/A,7.404
+easyOCR_testimg\img_002_42px.png,gray,0.5,1.8,0.1,beamsearch,아 1  '  ' 0,0.3457,N/A,6.843
+easyOCR_testimg\img_002_42px.png,gray,0.5,1.8,0.3,greedy,아 1  '  ' 0,0.3457,N/A,7.306
+easyOCR_testimg\img_002_42px.png,gray,0.5,1.8,0.3,beamsearch,아 1  '  ' 0,0.3457,N/A,6.941
+easyOCR_testimg\img_002_42px.png,gray,0.7,1.0,0.1,greedy,안녕,0.9987,N/A,2.305
+easyOCR_testimg\img_002_42px.png,gray,0.7,1.0,0.1,beamsearch,안녕,0.9987,N/A,2.065
+easyOCR_testimg\img_002_42px.png,gray,0.7,1.0,0.3,greedy,안녕,0.9987,N/A,1.955
+easyOCR_testimg\img_002_42px.png,gray,0.7,1.0,0.3,beamsearch,안녕,0.9987,N/A,1.997
+easyOCR_testimg\img_002_42px.png,gray,0.7,1.8,0.1,greedy,아 0,0.7323,N/A,6.369
+easyOCR_testimg\img_002_42px.png,gray,0.7,1.8,0.1,beamsearch,아 0,0.7323,N/A,6.951
+easyOCR_testimg\img_002_42px.png,gray,0.7,1.8,0.3,greedy,아 0,0.7323,N/A,6.587
+easyOCR_testimg\img_002_42px.png,gray,0.7,1.8,0.3,beamsearch,아 0,0.7323,N/A,6.732
+easyOCR_testimg\img_002_42px.png,clahe,0.5,1.0,0.1,greedy,안녕,0.9966,N/A,2.194
+easyOCR_testimg\img_002_42px.png,clahe,0.5,1.0,0.1,beamsearch,안녕,0.9966,N/A,1.973
+easyOCR_testimg\img_002_42px.png,clahe,0.5,1.0,0.3,greedy,안녕,0.9966,N/A,2.101
+easyOCR_testimg\img_002_42px.png,clahe,0.5,1.0,0.3,beamsearch,안녕,0.9966,N/A,2.067
+easyOCR_testimg\img_002_42px.png,clahe,0.5,1.8,0.1,greedy,2 7 [ 0 아,0.3379,N/A,6.674
+easyOCR_testimg\img_002_42px.png,clahe,0.5,1.8,0.1,beamsearch,2 7 [ 0 아,0.3379,N/A,7.254
+easyOCR_testimg\img_002_42px.png,clahe,0.5,1.8,0.3,greedy,2 7 [ 0 아,0.3379,N/A,7.321
+easyOCR_testimg\img_002_42px.png,clahe,0.5,1.8,0.3,beamsearch,2 7 [ 0 아,0.3379,N/A,6.472
+easyOCR_testimg\img_002_42px.png,clahe,0.7,1.0,0.1,greedy,안녕,0.9966,N/A,2.4
+easyOCR_testimg\img_002_42px.png,clahe,0.7,1.0,0.1,beamsearch,안녕,0.9966,N/A,2.304
+easyOCR_testimg\img_002_42px.png,clahe,0.7,1.0,0.3,greedy,안녕,0.9966,N/A,2.393
+easyOCR_testimg\img_002_42px.png,clahe,0.7,1.0,0.3,beamsearch,안녕,0.9966,N/A,2.496
+easyOCR_testimg\img_002_42px.png,clahe,0.7,1.8,0.1,greedy,0 아,0.73,N/A,6.923
+easyOCR_testimg\img_002_42px.png,clahe,0.7,1.8,0.1,beamsearch,0 아,0.73,N/A,6.73
+easyOCR_testimg\img_002_42px.png,clahe,0.7,1.8,0.3,greedy,0 아,0.73,N/A,6.541
+easyOCR_testimg\img_002_42px.png,clahe,0.7,1.8,0.3,beamsearch,0 아,0.73,N/A,6.685
+easyOCR_testimg\img_002_42px.png,adaptive_thresh,0.5,1.0,0.1,greedy,U든 [,0.0924,N/A,2.417
+easyOCR_testimg\img_002_42px.png,adaptive_thresh,0.5,1.0,0.1,beamsearch,U든 [,0.0924,N/A,2.459
+easyOCR_testimg\img_002_42px.png,adaptive_thresh,0.5,1.0,0.3,greedy,U든 [,0.0924,N/A,2.489
+easyOCR_testimg\img_002_42px.png,adaptive_thresh,0.5,1.0,0.3,beamsearch,U든 [,0.0924,N/A,2.385
+easyOCR_testimg\img_002_42px.png,adaptive_thresh,0.5,1.8,0.1,greedy, [논,0.0075,N/A,6.676
+easyOCR_testimg\img_002_42px.png,adaptive_thresh,0.5,1.8,0.1,beamsearch, [논,0.0075,N/A,6.451
+easyOCR_testimg\img_002_42px.png,adaptive_thresh,0.5,1.8,0.3,greedy, [논,0.0075,N/A,6.993
+easyOCR_testimg\img_002_42px.png,adaptive_thresh,0.5,1.8,0.3,beamsearch, [논,0.0075,N/A,7.123
+easyOCR_testimg\img_002_42px.png,adaptive_thresh,0.7,1.0,0.1,greedy,U든,0.0608,N/A,2.332
+easyOCR_testimg\img_002_42px.png,adaptive_thresh,0.7,1.0,0.1,beamsearch,U든,0.0608,N/A,2.177
+easyOCR_testimg\img_002_42px.png,adaptive_thresh,0.7,1.0,0.3,greedy,U든,0.0608,N/A,2.278
+easyOCR_testimg\img_002_42px.png,adaptive_thresh,0.7,1.0,0.3,beamsearch,U든,0.0608,N/A,2.409
+easyOCR_testimg\img_002_42px.png,adaptive_thresh,0.7,1.8,0.1,greedy,[논,0.0149,N/A,6.631
+easyOCR_testimg\img_002_42px.png,adaptive_thresh,0.7,1.8,0.1,beamsearch,[논,0.0149,N/A,6.968
+easyOCR_testimg\img_002_42px.png,adaptive_thresh,0.7,1.8,0.3,greedy,[논,0.0149,N/A,7.068
+easyOCR_testimg\img_002_42px.png,adaptive_thresh,0.7,1.8,0.3,beamsearch,[논,0.0149,N/A,7.051
+easyOCR_testimg\img_002_42px.png,denoise_otsu,0.5,1.0,0.1,greedy,안녕,0.9988,N/A,2.258
+easyOCR_testimg\img_002_42px.png,denoise_otsu,0.5,1.0,0.1,beamsearch,안녕,0.9988,N/A,2.15
+easyOCR_testimg\img_002_42px.png,denoise_otsu,0.5,1.0,0.3,greedy,안녕,0.9988,N/A,2.2
+easyOCR_testimg\img_002_42px.png,denoise_otsu,0.5,1.0,0.3,beamsearch,안녕,0.9988,N/A,2.384
+easyOCR_testimg\img_002_42px.png,denoise_otsu,0.5,1.8,0.1,greedy,아니 -   6,0.3269,N/A,6.674
+easyOCR_testimg\img_002_42px.png,denoise_otsu,0.5,1.8,0.1,beamsearch,아니 -   6,0.3269,N/A,7.546
+easyOCR_testimg\img_002_42px.png,denoise_otsu,0.5,1.8,0.3,greedy,아니 -   6,0.3269,N/A,6.778
+easyOCR_testimg\img_002_42px.png,denoise_otsu,0.5,1.8,0.3,beamsearch,아니 -   6,0.3269,N/A,6.95
+easyOCR_testimg\img_002_42px.png,denoise_otsu,0.7,1.0,0.1,greedy,안녕,0.9988,N/A,2.434
+easyOCR_testimg\img_002_42px.png,denoise_otsu,0.7,1.0,0.1,beamsearch,안녕,0.9988,N/A,2.332
+easyOCR_testimg\img_002_42px.png,denoise_otsu,0.7,1.0,0.3,greedy,안녕,0.9988,N/A,2.308
+easyOCR_testimg\img_002_42px.png,denoise_otsu,0.7,1.0,0.3,beamsearch,안녕,0.9988,N/A,2.355
+easyOCR_testimg\img_002_42px.png,denoise_otsu,0.7,1.8,0.1,greedy,아니 6,0.3798,N/A,7.158
+easyOCR_testimg\img_002_42px.png,denoise_otsu,0.7,1.8,0.1,beamsearch,아니 6,0.3798,N/A,6.461
+easyOCR_testimg\img_002_42px.png,denoise_otsu,0.7,1.8,0.3,greedy,아니 6,0.3798,N/A,7.091
+easyOCR_testimg\img_002_42px.png,denoise_otsu,0.7,1.8,0.3,beamsearch,아니 6,0.3798,N/A,6.614
+easyOCR_testimg\img_002_42px.png,upscale_2x,0.5,1.0,0.1,greedy,아 ~ ,0.5999,N/A,9.464
+easyOCR_testimg\img_002_42px.png,upscale_2x,0.5,1.0,0.1,beamsearch,아 ~ ,0.5999,N/A,8.841
+easyOCR_testimg\img_002_42px.png,upscale_2x,0.5,1.0,0.3,greedy,아 ~ ,0.5999,N/A,8.86
+easyOCR_testimg\img_002_42px.png,upscale_2x,0.5,1.0,0.3,beamsearch,아 ~ ,0.5999,N/A,9.257
+easyOCR_testimg\img_002_42px.png,upscale_2x,0.5,1.8,0.1,greedy,? ~ 9,0.5051,N/A,11.62
+easyOCR_testimg\img_002_42px.png,upscale_2x,0.5,1.8,0.1,beamsearch,? ~ 9,0.5051,N/A,10.173
+easyOCR_testimg\img_002_42px.png,upscale_2x,0.5,1.8,0.3,greedy,? ~ 9,0.5051,N/A,10.585
+easyOCR_testimg\img_002_42px.png,upscale_2x,0.5,1.8,0.3,beamsearch,? ~ 9,0.5051,N/A,10.839
+easyOCR_testimg\img_002_42px.png,upscale_2x,0.7,1.0,0.1,greedy,아,0.9998,N/A,8.18
+easyOCR_testimg\img_002_42px.png,upscale_2x,0.7,1.0,0.1,beamsearch,아,0.9998,N/A,8.424
+easyOCR_testimg\img_002_42px.png,upscale_2x,0.7,1.0,0.3,greedy,아,0.9998,N/A,8.152
+easyOCR_testimg\img_002_42px.png,upscale_2x,0.7,1.0,0.3,beamsearch,아,0.9998,N/A,7.618
+easyOCR_testimg\img_002_42px.png,upscale_2x,0.7,1.8,0.1,greedy,? 9,0.4399,N/A,11.353
+easyOCR_testimg\img_002_42px.png,upscale_2x,0.7,1.8,0.1,beamsearch,? 9,0.4399,N/A,11.54
+easyOCR_testimg\img_002_42px.png,upscale_2x,0.7,1.8,0.3,greedy,? 9,0.4399,N/A,11.218
+easyOCR_testimg\img_002_42px.png,upscale_2x,0.7,1.8,0.3,beamsearch,? 9,0.4399,N/A,9.89
+easyOCR_testimg\img_003_16px.png,gray,0.5,1.0,0.1,greedy,[[어파이프,0.3747,N/A,2.485
+easyOCR_testimg\img_003_16px.png,gray,0.5,1.0,0.1,beamsearch,[[어파이프,0.3747,N/A,2.35
+easyOCR_testimg\img_003_16px.png,gray,0.5,1.0,0.3,greedy,[[어파이프,0.3747,N/A,2.38
+easyOCR_testimg\img_003_16px.png,gray,0.5,1.0,0.3,beamsearch,[[어파이프,0.3747,N/A,2.265
+easyOCR_testimg\img_003_16px.png,gray,0.5,1.8,0.1,greedy, II [I어파이프 _ UI,0.3583,N/A,6.501
+easyOCR_testimg\img_003_16px.png,gray,0.5,1.8,0.1,beamsearch, II [I어파이프 _ UI,0.3583,N/A,7.072
+easyOCR_testimg\img_003_16px.png,gray,0.5,1.8,0.3,greedy, II [I어파이프 _ UI,0.3583,N/A,7.275
+easyOCR_testimg\img_003_16px.png,gray,0.5,1.8,0.3,beamsearch, II [I어파이프 _ UI,0.3583,N/A,7.369
+easyOCR_testimg\img_003_16px.png,gray,0.7,1.0,0.1,greedy,[[어파이프,0.3747,N/A,2.217
+easyOCR_testimg\img_003_16px.png,gray,0.7,1.0,0.1,beamsearch,[[어파이프,0.3747,N/A,2.171
+easyOCR_testimg\img_003_16px.png,gray,0.7,1.0,0.3,greedy,[[어파이프,0.3747,N/A,2.108
+easyOCR_testimg\img_003_16px.png,gray,0.7,1.0,0.3,beamsearch,[[어파이프,0.3747,N/A,2.353
+easyOCR_testimg\img_003_16px.png,gray,0.7,1.8,0.1,greedy,II [I어파이프 UI,0.5719,N/A,6.725
+easyOCR_testimg\img_003_16px.png,gray,0.7,1.8,0.1,beamsearch,II [I어파이프 UI,0.5719,N/A,7.168
+easyOCR_testimg\img_003_16px.png,gray,0.7,1.8,0.3,greedy,II [I어파이프 UI,0.5719,N/A,6.792
+easyOCR_testimg\img_003_16px.png,gray,0.7,1.8,0.3,beamsearch,II [I어파이프 UI,0.5719,N/A,6.714
+easyOCR_testimg\img_003_16px.png,clahe,0.5,1.0,0.1,greedy,[[어파이프,0.342,N/A,2.367
+easyOCR_testimg\img_003_16px.png,clahe,0.5,1.0,0.1,beamsearch,[[어파이프,0.342,N/A,2.206
+easyOCR_testimg\img_003_16px.png,clahe,0.5,1.0,0.3,greedy,[[어파이프,0.342,N/A,2.323
+easyOCR_testimg\img_003_16px.png,clahe,0.5,1.0,0.3,beamsearch,[[어파이프,0.342,N/A,2.244
+easyOCR_testimg\img_003_16px.png,clahe,0.5,1.8,0.1,greedy, II [I어파이프 _ UI,0.3122,N/A,7.289
+easyOCR_testimg\img_003_16px.png,clahe,0.5,1.8,0.1,beamsearch, II [I어파이프 _ UI,0.3122,N/A,7.188
+easyOCR_testimg\img_003_16px.png,clahe,0.5,1.8,0.3,greedy, II [I어파이프 _ UI,0.3122,N/A,7.176
+easyOCR_testimg\img_003_16px.png,clahe,0.5,1.8,0.3,beamsearch, II [I어파이프 _ UI,0.3122,N/A,7.211
+easyOCR_testimg\img_003_16px.png,clahe,0.7,1.0,0.1,greedy,[[어파이프,0.342,N/A,2.392
+easyOCR_testimg\img_003_16px.png,clahe,0.7,1.0,0.1,beamsearch,[[어파이프,0.342,N/A,1.997
+easyOCR_testimg\img_003_16px.png,clahe,0.7,1.0,0.3,greedy,[[어파이프,0.342,N/A,2.281
+easyOCR_testimg\img_003_16px.png,clahe,0.7,1.0,0.3,beamsearch,[[어파이프,0.342,N/A,2.37
+easyOCR_testimg\img_003_16px.png,clahe,0.7,1.8,0.1,greedy,II [I어파이프 UI,0.4991,N/A,7.114
+easyOCR_testimg\img_003_16px.png,clahe,0.7,1.8,0.1,beamsearch,II [I어파이프 UI,0.4991,N/A,7.248
+easyOCR_testimg\img_003_16px.png,clahe,0.7,1.8,0.3,greedy,II [I어파이프 UI,0.4991,N/A,7.139
+easyOCR_testimg\img_003_16px.png,clahe,0.7,1.8,0.3,beamsearch,II [I어파이프 UI,0.4991,N/A,7.17
+easyOCR_testimg\img_003_16px.png,adaptive_thresh,0.5,1.0,0.1,greedy,[[I이파이프,0.2663,N/A,2.369
+easyOCR_testimg\img_003_16px.png,adaptive_thresh,0.5,1.0,0.1,beamsearch,[I이파이프,0.2663,N/A,2.286
+easyOCR_testimg\img_003_16px.png,adaptive_thresh,0.5,1.0,0.3,greedy,[[I이파이프,0.2663,N/A,2.331
+easyOCR_testimg\img_003_16px.png,adaptive_thresh,0.5,1.0,0.3,beamsearch,[I이파이프,0.2663,N/A,2.375
+easyOCR_testimg\img_003_16px.png,adaptive_thresh,0.5,1.8,0.1,greedy,TI  ' +이 [IC,0.282,N/A,7.468
+easyOCR_testimg\img_003_16px.png,adaptive_thresh,0.5,1.8,0.1,beamsearch,TI  ' +이 [IC,0.282,N/A,7.598
+easyOCR_testimg\img_003_16px.png,adaptive_thresh,0.5,1.8,0.3,greedy,TI  ' +이 [IC,0.282,N/A,7.835
+easyOCR_testimg\img_003_16px.png,adaptive_thresh,0.5,1.8,0.3,beamsearch,TI  ' +이 [IC,0.282,N/A,7.432
+easyOCR_testimg\img_003_16px.png,adaptive_thresh,0.7,1.0,0.1,greedy,[[I이파이프,0.2663,N/A,2.512
+easyOCR_testimg\img_003_16px.png,adaptive_thresh,0.7,1.0,0.1,beamsearch,[I이파이프,0.2663,N/A,2.333
+easyOCR_testimg\img_003_16px.png,adaptive_thresh,0.7,1.0,0.3,greedy,[[I이파이프,0.2663,N/A,2.331
+easyOCR_testimg\img_003_16px.png,adaptive_thresh,0.7,1.0,0.3,beamsearch,[I이파이프,0.2663,N/A,2.381
+easyOCR_testimg\img_003_16px.png,adaptive_thresh,0.7,1.8,0.1,greedy,TI +이 [IC,0.4677,N/A,7.014
+easyOCR_testimg\img_003_16px.png,adaptive_thresh,0.7,1.8,0.1,beamsearch,TI +이 [IC,0.4677,N/A,6.894
+easyOCR_testimg\img_003_16px.png,adaptive_thresh,0.7,1.8,0.3,greedy,TI +이 [IC,0.4677,N/A,6.761
+easyOCR_testimg\img_003_16px.png,adaptive_thresh,0.7,1.8,0.3,beamsearch,TI +이 [IC,0.4677,N/A,6.966
+easyOCR_testimg\img_003_16px.png,denoise_otsu,0.5,1.0,0.1,greedy,[[I어파이프,0.2911,N/A,2.522
+easyOCR_testimg\img_003_16px.png,denoise_otsu,0.5,1.0,0.1,beamsearch,[[어파이프,0.2911,N/A,2.399
+easyOCR_testimg\img_003_16px.png,denoise_otsu,0.5,1.0,0.3,greedy,[[I어파이프,0.2911,N/A,2.184
+easyOCR_testimg\img_003_16px.png,denoise_otsu,0.5,1.0,0.3,beamsearch,[[어파이프,0.2911,N/A,2.395
+easyOCR_testimg\img_003_16px.png,denoise_otsu,0.5,1.8,0.1,greedy,I [[I어파이프 1,0.8183,N/A,6.663
+easyOCR_testimg\img_003_16px.png,denoise_otsu,0.5,1.8,0.1,beamsearch,I [[I어파이프 1,0.8183,N/A,6.916
+easyOCR_testimg\img_003_16px.png,denoise_otsu,0.5,1.8,0.3,greedy,I [[I어파이프 1,0.8183,N/A,7.12
+easyOCR_testimg\img_003_16px.png,denoise_otsu,0.5,1.8,0.3,beamsearch,I [[I어파이프 1,0.8183,N/A,7.136
+easyOCR_testimg\img_003_16px.png,denoise_otsu,0.7,1.0,0.1,greedy,[[I어파이프,0.2911,N/A,2.247
+easyOCR_testimg\img_003_16px.png,denoise_otsu,0.7,1.0,0.1,beamsearch,[[어파이프,0.2911,N/A,2.002
+easyOCR_testimg\img_003_16px.png,denoise_otsu,0.7,1.0,0.3,greedy,[[I어파이프,0.2911,N/A,2.22
+easyOCR_testimg\img_003_16px.png,denoise_otsu,0.7,1.0,0.3,beamsearch,[[어파이프,0.2911,N/A,1.998
+easyOCR_testimg\img_003_16px.png,denoise_otsu,0.7,1.8,0.1,greedy,[[I어파이프,0.6019,N/A,6.744
+easyOCR_testimg\img_003_16px.png,denoise_otsu,0.7,1.8,0.1,beamsearch,[[I어파이프,0.6019,N/A,7.108
+easyOCR_testimg\img_003_16px.png,denoise_otsu,0.7,1.8,0.3,greedy,[[I어파이프,0.6019,N/A,6.876
+easyOCR_testimg\img_003_16px.png,denoise_otsu,0.7,1.8,0.3,beamsearch,[[I어파이프,0.6019,N/A,6.659
+easyOCR_testimg\img_003_16px.png,upscale_2x,0.5,1.0,0.1,greedy,l I 파이프 UJ L I0  1 1,0.4123,N/A,8.039
+easyOCR_testimg\img_003_16px.png,upscale_2x,0.5,1.0,0.1,beamsearch,l I 파이프 UJ L I0  1 1,0.4123,N/A,9.222
+easyOCR_testimg\img_003_16px.png,upscale_2x,0.5,1.0,0.3,greedy,l I 파이프 UJ L I0  [ 1,0.4424,N/A,8.893
+easyOCR_testimg\img_003_16px.png,upscale_2x,0.5,1.0,0.3,beamsearch,l I 파이프 UJ L I0  [ 1,0.4424,N/A,9.105
+easyOCR_testimg\img_003_16px.png,upscale_2x,0.5,1.8,0.1,greedy,I어파이프 UJ L 다 < + 1,0.5964,N/A,11.041
+easyOCR_testimg\img_003_16px.png,upscale_2x,0.5,1.8,0.1,beamsearch,I어파이프 UJ L 다 < + 1,0.5964,N/A,10.547
+easyOCR_testimg\img_003_16px.png,upscale_2x,0.5,1.8,0.3,greedy,I어파이프 UJ L 다 < + 1,0.5964,N/A,10.447
+easyOCR_testimg\img_003_16px.png,upscale_2x,0.5,1.8,0.3,beamsearch,I어파이프 UJ L 다 < + 1,0.5964,N/A,10.932
+easyOCR_testimg\img_003_16px.png,upscale_2x,0.7,1.0,0.1,greedy,UJ I어파이프 L,0.6028,N/A,8.136
+easyOCR_testimg\img_003_16px.png,upscale_2x,0.7,1.0,0.1,beamsearch,UJ I어파이프 L,0.6028,N/A,7.817
+easyOCR_testimg\img_003_16px.png,upscale_2x,0.7,1.0,0.3,greedy,UJ I어파이프 L,0.6028,N/A,8.337
+easyOCR_testimg\img_003_16px.png,upscale_2x,0.7,1.0,0.3,beamsearch,UJ I어파이프 L,0.6028,N/A,8.877
+easyOCR_testimg\img_003_16px.png,upscale_2x,0.7,1.8,0.1,greedy,I어파이프 UJ L <,0.7827,N/A,9.96
+easyOCR_testimg\img_003_16px.png,upscale_2x,0.7,1.8,0.1,beamsearch,I어파이프 UJ L <,0.7827,N/A,10.077
+easyOCR_testimg\img_003_16px.png,upscale_2x,0.7,1.8,0.3,greedy,I어파이프 UJ L <,0.7827,N/A,11.207
+easyOCR_testimg\img_003_16px.png,upscale_2x,0.7,1.8,0.3,beamsearch,I어파이프 UJ L <,0.7827,N/A,10.169
