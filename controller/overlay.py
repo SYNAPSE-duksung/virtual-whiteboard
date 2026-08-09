@@ -47,6 +47,45 @@ def _px(point) -> tuple[int, int]:
     return (int(round(float(point[0]))), int(round(float(point[1]))))
 
 
+def _wrap_text(text: str, *, font_scale: float, thickness: int, max_width: int) -> list[str]:
+    """``max_width`` px 안에 들어가도록 단어 단위로 줄바꿈 (실제 렌더 폭을 잰다).
+
+    프레임 폭이 좁을 때(캘리브레이션/3D 디버그 안내 문구는 길다) 텍스트가 프레임
+    바깥으로 잘려 나가는 것을 막는다. 폭 계산에 ``cv2.getTextSize``를 써서 문자
+    수가 아니라 실제 렌더 폭 기준으로 자른다.
+    """
+    words = text.split(" ")
+    lines: list[str] = []
+    current = ""
+    for word in words:
+        candidate = f"{current} {word}".strip()
+        (w, _), _ = cv2.getTextSize(candidate, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
+        if w > max_width and current:
+            lines.append(current)
+            current = word
+        else:
+            current = candidate
+    if current:
+        lines.append(current)
+    return lines
+
+
+def _put_text_wrapped(
+    annotated: np.ndarray, text: str, origin: tuple[int, int], *,
+    font_scale: float, color: tuple[int, int, int], thickness: int, line_height: int,
+    max_width: int | None = None,
+) -> int:
+    """``_wrap_text``로 줄바꿈해 여러 줄로 그리고, 그린 줄 수를 반환한다."""
+    x, y = origin
+    if max_width is None:
+        max_width = annotated.shape[1] - x - 15  # 오른쪽 여백 15px
+    lines = _wrap_text(text, font_scale=font_scale, thickness=thickness, max_width=max_width)
+    for i, line in enumerate(lines):
+        cv2.putText(annotated, line, (x, y + line_height * i),
+                    cv2.FONT_HERSHEY_SIMPLEX, font_scale, color, thickness, cv2.LINE_AA)
+    return len(lines)
+
+
 def draw_3d_debug(
     annotated: np.ndarray, result, *, tracker: PenTracker, plane_size_mm: tuple[float, float]
 ) -> None:
@@ -72,8 +111,8 @@ def draw_3d_debug(
             )
         else:
             reason = "3D DEBUG: hand pose solve failed this frame (falling back to pen_ratio)"
-        cv2.putText(annotated, reason, (15, 30), cv2.FONT_HERSHEY_SIMPLEX,
-                    0.55, CAL_ERR_COLOR, 2, cv2.LINE_AA)
+        _put_text_wrapped(annotated, reason, (15, 30), font_scale=0.55,
+                           color=CAL_ERR_COLOR, thickness=2, line_height=26)
         return
 
     tip = np.array(debug.tip_px, dtype=np.float64)
@@ -128,7 +167,13 @@ def draw_3d_debug(
         (f"source {result.contact_source}   contact {'YES' if contact else 'no'}", axis_color),
     ]
     # 좌하단 상태 문구와 겹치지 않도록 우상단에 패널을 띄운다.
-    panel_w, line_h = 300, 23
+    # panel_w는 고정값 대신 실제 렌더 폭 중 최댓값으로 맞춰, 값이 길어져도(음수 좌표·
+    # 큰 숫자 등) 배경 박스 밖으로 글씨가 삐져나오지 않게 한다.
+    line_h = 23
+    text_widths = [
+        cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.47, 1)[0][0] for text, _ in lines
+    ]
+    panel_w = max(text_widths, default=200) + 10
     x0 = max(width - panel_w - 12, 15)
     y0 = 18
     overlay = annotated.copy()
@@ -223,20 +268,24 @@ def draw_calibration_overlay(
     else:
         guide = "[CALIBRATION] 4 points done - Enter/S apply / Z undo / X reset / Esc cancel"
     # main()의 FPS 카운터가 (15,30)을 이미 쓰므로 그 아래에 그린다.
-    cv2.putText(annotated, guide, (15, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.65, CAL_TEXT_COLOR, 2, cv2.LINE_AA)
+    guide_lines = _put_text_wrapped(annotated, guide, (15, 60), font_scale=0.65,
+                                     color=CAL_TEXT_COLOR, thickness=2, line_height=28)
     if fingertip is None:
-        cv2.putText(
+        _put_text_wrapped(
             annotated, "(no hand detected - SPACE unavailable, click still works)",
-            (15, 85), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (150, 150, 255), 1, cv2.LINE_AA,
+            (15, 60 + 28 * guide_lines), font_scale=0.55,
+            color=(150, 150, 255), thickness=1, line_height=24,
         )
 
     if message:
         text, ok = message
         color = CAL_OK_COLOR if ok else CAL_ERR_COLOR
-        cv2.putText(
-            annotated, text, (15, annotated.shape[0] - 20),
-            cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2, cv2.LINE_AA,
-        )
+        lines = _wrap_text(text, font_scale=0.6, thickness=2,
+                            max_width=annotated.shape[1] - 30)
+        base_y = annotated.shape[0] - 20 - 26 * (len(lines) - 1)
+        for i, line in enumerate(lines):
+            cv2.putText(annotated, line, (15, base_y + 26 * i),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2, cv2.LINE_AA)
     return annotated
 
 
