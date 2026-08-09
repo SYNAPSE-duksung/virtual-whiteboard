@@ -87,16 +87,25 @@ def _put_text_wrapped(
 
 
 def draw_3d_debug(
-    annotated: np.ndarray, result, *, tracker: PenTracker, plane_size_mm: tuple[float, float]
+    annotated: np.ndarray, result, *, tracker: PenTracker, plane_size_mm: tuple[float, float],
+    show_panel: bool = True,
 ) -> None:
-    """손끝→평면 수선(직교 벡터)과 높이 눈금·수치를 겹쳐 그린다 (제자리 수정).
+    """손끝→평면 수선(직교 벡터)과 높이 눈금(그래픽)을 겹쳐 그린다 (제자리 수정).
 
     3D가 꺼져 있거나 이번 프레임에서 자세 추정이 실패했으면 그 사실 자체를 표시한다 —
     디버그를 켰는데 아무것도 안 보이면 "왜 안 보이는지"를 알 수 없기 때문이다.
+
+    ``show_panel=False``면 수치 텍스트 패널(우상단 8줄 요약, off/실패 사유 문구)은
+    프레임에 굽지 않는다 — PyQt 앱처럼 같은 정보를 Qt 라벨로 별도 표시할 수 있는
+    호출부는 영상 위에 큰 텍스트 박스가 겹치지 않도록 끌 수 있다. 손끝-평면 수선·
+    눈금·높이 게이지 같은 그래픽 오버레이는 손끝 위치와 겹쳐 봐야 의미가 있어
+    ``show_panel`` 값과 무관하게 계속 그린다.
     """
     height, width = annotated.shape[:2]
     debug = getattr(result, "contact_debug", None)
     if debug is None:
+        if not show_panel:
+            return
         # OpenCV의 Hershey 폰트에는 한글 글리프가 없어 ????로 깨진다 — 오버레이 문구는
         # 전부 ASCII로 쓴다(코드베이스의 다른 오버레이도 같은 규칙).
         estimator = tracker.contact_estimator
@@ -150,39 +159,41 @@ def draw_3d_debug(
 
     estimator = tracker.contact_estimator
     detector = tracker.contact_detector
-    plane_x, plane_y = debug.plane_xy_mm
-    plane_w, plane_h = plane_size_mm
-    zero = "n/a  (press T)" if estimator is None else f"{estimator.zero_offset_mm:+8.1f} mm"
-    lines = [
-        ("3D DEBUG   (D to hide)", CAL_TEXT_COLOR),
-        (f"height     {debug.height_mm:+8.1f} mm", axis_color),
-        (f"raw height {debug.raw_height_mm:+8.1f} mm", CAL_TEXT_COLOR),
-        (f"zero offs  {zero}",
-         CAL_TEXT_COLOR if estimator is not None else CAL_ERR_COLOR),
-        (f"thresh d/u {detector.down_mm:.1f} / {detector.up_mm:.1f} mm", DEBUG_RULER_COLOR),
-        (f"plane XY   {plane_x:6.0f},{plane_y:6.0f} of {plane_w:.0f}x{plane_h:.0f}"
-         + ("" if debug.inside_plane else "  OUT"),
-         CAL_TEXT_COLOR if debug.inside_plane else CAL_ERR_COLOR),
-        (f"hand reproj{debug.reprojection_error_px:7.1f} px", CAL_TEXT_COLOR),
-        (f"source {result.contact_source}   contact {'YES' if contact else 'no'}", axis_color),
-    ]
-    # 좌하단 상태 문구와 겹치지 않도록 우상단에 패널을 띄운다.
-    # panel_w는 고정값 대신 실제 렌더 폭 중 최댓값으로 맞춰, 값이 길어져도(음수 좌표·
-    # 큰 숫자 등) 배경 박스 밖으로 글씨가 삐져나오지 않게 한다.
-    line_h = 23
-    text_widths = [
-        cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.47, 1)[0][0] for text, _ in lines
-    ]
-    panel_w = max(text_widths, default=200) + 10
-    x0 = max(width - panel_w - 12, 15)
-    y0 = 18
-    overlay = annotated.copy()
-    cv2.rectangle(overlay, (x0 - 10, y0 - 6),
-                  (x0 + panel_w + 2, y0 + line_h * len(lines)), (25, 25, 25), -1)
-    cv2.addWeighted(overlay, 0.55, annotated, 0.45, 0, annotated)
-    for i, (text, color) in enumerate(lines):
-        cv2.putText(annotated, text, (x0, y0 + line_h * (i + 1) - 7),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.47, color, 1, cv2.LINE_AA)
+
+    if show_panel:
+        plane_x, plane_y = debug.plane_xy_mm
+        plane_w, plane_h = plane_size_mm
+        zero = "n/a  (press T)" if estimator is None else f"{estimator.zero_offset_mm:+8.1f} mm"
+        lines = [
+            ("3D DEBUG   (D to hide)", CAL_TEXT_COLOR),
+            (f"height     {debug.height_mm:+8.1f} mm", axis_color),
+            (f"raw height {debug.raw_height_mm:+8.1f} mm", CAL_TEXT_COLOR),
+            (f"zero offs  {zero}",
+             CAL_TEXT_COLOR if estimator is not None else CAL_ERR_COLOR),
+            (f"thresh d/u {detector.down_mm:.1f} / {detector.up_mm:.1f} mm", DEBUG_RULER_COLOR),
+            (f"plane XY   {plane_x:6.0f},{plane_y:6.0f} of {plane_w:.0f}x{plane_h:.0f}"
+             + ("" if debug.inside_plane else "  OUT"),
+             CAL_TEXT_COLOR if debug.inside_plane else CAL_ERR_COLOR),
+            (f"hand reproj{debug.reprojection_error_px:7.1f} px", CAL_TEXT_COLOR),
+            (f"source {result.contact_source}   contact {'YES' if contact else 'no'}", axis_color),
+        ]
+        # 좌하단 상태 문구와 겹치지 않도록 우상단에 패널을 띄운다.
+        # panel_w는 고정값 대신 실제 렌더 폭 중 최댓값으로 맞춰, 값이 길어져도(음수 좌표·
+        # 큰 숫자 등) 배경 박스 밖으로 글씨가 삐져나오지 않게 한다.
+        line_h = 23
+        text_widths = [
+            cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.47, 1)[0][0] for text, _ in lines
+        ]
+        panel_w = max(text_widths, default=200) + 10
+        x0 = max(width - panel_w - 12, 15)
+        y0 = 18
+        overlay = annotated.copy()
+        cv2.rectangle(overlay, (x0 - 10, y0 - 6),
+                      (x0 + panel_w + 2, y0 + line_h * len(lines)), (25, 25, 25), -1)
+        cv2.addWeighted(overlay, 0.55, annotated, 0.45, 0, annotated)
+        for i, (text, color) in enumerate(lines):
+            cv2.putText(annotated, text, (x0, y0 + line_h * (i + 1) - 7),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.47, color, 1, cv2.LINE_AA)
 
     draw_height_gauge(annotated, debug.height_mm, detector, contact)
 

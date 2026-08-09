@@ -20,7 +20,7 @@ from controller.ocr_llm_pipeline import OcrLlmPipelineWorker, PipelineResult
 from controller.ocr_llm_pipeline import STATUS_IDLE as _PIPELINE_IDLE
 from controller.state_machine import PenStateMachine
 from core.camera import DEFAULT_INTRINSICS_PATH, CameraIntrinsics
-from core.contact3d import DEFAULT_PLANE_SIZE_MM
+from core.contact3d import DEFAULT_PLANE_SIZE_MM, MAX_REPROJECTION_ERROR_PX
 from core.geometry import DEFAULT_CALIBRATION_PATH, CalibrationPicker, PerspectiveCalibration
 from core.pen_tracker import PenTracker
 from core.touch_calibration import (
@@ -70,6 +70,13 @@ class SessionDebug:
     ocr_text: str | None = None
     corrected_text: str | None = None
     pipeline_error: str | None = None
+    # 3D 디버그 패널(controller/overlay.py의 draw_3d_debug 우상단 패널)과 동일한 정보를
+    # PyQt 쪽에서 Qt 라벨로 따로 그릴 수 있도록 노출한다 (영상 위에 텍스트를 굽지 않기 위함).
+    plane_xy_mm: tuple[float, float] | None = None  # 손끝을 평면에 정사영한 좌표 (이번 프레임 성공 시)
+    plane_size_mm: tuple[float, float] | None = None  # 캘리브레이션한 평면의 실제 크기(가로,세로 mm)
+    contact_inside_plane: bool | None = None  # plane_xy_mm이 평면 범위 안인지 (3D 기준)
+    contact_reprojection_error_px: float | None = None  # 이번 프레임 손 자세 재투영 오차(성공 시)
+    contact_last_error_px: float | None = None  # 마지막 시도의 재투영 오차 (실패한 프레임 포함)
 
 
 class WhiteboardSession:
@@ -100,6 +107,7 @@ class WhiteboardSession:
         plane_size_mm: tuple[float, float] = DEFAULT_PLANE_SIZE_MM,
         frame_size: tuple[int, int] = (1280, 720),
         use_3d_contact: bool = True,
+        render_3d_debug_inline: bool = True,
     ) -> None:
         # 세션 시작 시 저장된 캘리브레이션을 1회 자동 로드한다. 없거나(최초 실행)
         # 손상됐으면 조용히 게이팅 없는 상태로 시작하고, 데모 루프가 `needs_calibration`을
@@ -181,6 +189,12 @@ class WhiteboardSession:
 
         # 3D 디버그 오버레이(수선 벡터 + 높이 눈금 + 수치 패널) 표시 여부.
         self._debug_3d = False
+        # 수치 패널(텍스트)을 프레임 픽셀에 직접 구울지 여부. OpenCV 데모는 별도 표시
+        # 수단이 없어 그대로 굽고(True), PyQt 앱은 우측 패널의 Qt 라벨로 따로 보여주므로
+        # False로 꺼서 영상 위에 큰 텍스트 박스가 덮이지 않게 한다. 수선 벡터·높이 눈금
+        # (그래픽 오버레이)은 계속 프레임에 그린다 — 이건 "글자"가 아니라 시각적 표시라
+        # Qt 라벨로 대체하기 애매하고, 손끝 위치와 겹쳐 봐야 의미가 있다.
+        self._render_3d_debug_inline = render_3d_debug_inline
 
     @property
     def pen_requested(self) -> bool:
@@ -221,6 +235,7 @@ class WhiteboardSession:
             erase_progress = 0.0
         estimator = self._tracker.contact_estimator
         detector = self._tracker.contact_detector
+        contact_debug = frame.contact_debug if frame is not None else None
         return SessionDebug(
             mode=self.mode_name,
             hand_detected=hand_detected,
@@ -247,6 +262,15 @@ class WhiteboardSession:
             ocr_text=self._last_pipeline_result.ocr_text,
             corrected_text=self._last_pipeline_result.corrected_text,
             pipeline_error=self._last_pipeline_result.error,
+            plane_xy_mm=contact_debug.plane_xy_mm if contact_debug is not None else None,
+            plane_size_mm=self._plane_size_mm if self._debug_3d else None,
+            contact_inside_plane=contact_debug.inside_plane if contact_debug is not None else None,
+            contact_reprojection_error_px=(
+                contact_debug.reprojection_error_px if contact_debug is not None else None
+            ),
+            contact_last_error_px=(
+                estimator.last_reprojection_error_px if estimator is not None else None
+            ),
         )
 
     # ------------------------------------------------------------------
@@ -763,7 +787,10 @@ class WhiteboardSession:
                 cv2.LINE_AA,
             )
         if self._debug_3d:
-            overlay.draw_3d_debug(annotated, result, tracker=self._tracker, plane_size_mm=self._plane_size_mm)
+            overlay.draw_3d_debug(
+                annotated, result, tracker=self._tracker, plane_size_mm=self._plane_size_mm,
+                show_panel=self._render_3d_debug_inline,
+            )
         return annotated
 
     def _draw_to(self, fingertip: tuple[int, int]) -> None:

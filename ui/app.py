@@ -35,6 +35,7 @@ from PyQt6.QtWidgets import (
 )
 
 from controller.session import SessionDebug, WhiteboardSession
+from core.contact3d import MAX_REPROJECTION_ERROR_PX
 
 _FRAME_INTERVAL_MS = 33  # ~30 fps
 
@@ -118,7 +119,9 @@ class WhiteboardWindow(QMainWindow):
             raise RuntimeError(f"카메라 {camera_index}을(를) 열 수 없습니다.")
         self._mirror = mirror
         self._flip_vertical = flip_vertical
-        self._session = WhiteboardSession()
+        # 3D 디버그 수치 패널은 영상 위에 굽지 않고 우측 Qt 라벨(self._debug3d_label)로
+        # 따로 보여준다 — 화면이 커지면 텍스트 박스가 실제 손 위치를 덮어버리는 문제가 있었음.
+        self._session = WhiteboardSession(render_3d_debug_inline=False)
 
         self._video = QLabel("카메라 대기 중...")
         self._video.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -136,6 +139,14 @@ class WhiteboardWindow(QMainWindow):
         self._pipeline_label = QLabel("OCR/LLM: 대기")
         self._calibration_label = QLabel("")
 
+        # 3D 디버그 수치 패널 — 영상 위에 굽는 대신 여기 모노스페이스 라벨로 표시한다
+        # (3D 디버그가 꺼져 있으면 빈 문자열, _update_debug3d_label()이 채운다).
+        self._debug3d_label = QLabel("")
+        self._debug3d_label.setWordWrap(True)
+        self._debug3d_label.setStyleSheet(
+            "font-family: Consolas, 'DejaVu Sans Mono', monospace; font-size: 11px; color: #333333;"
+        )
+
         right_panel = QWidget()
         right_panel.setFixedWidth(300)
         right_layout = QVBoxLayout()
@@ -146,6 +157,7 @@ class WhiteboardWindow(QMainWindow):
         right_layout.addWidget(self._status_label2)
         right_layout.addWidget(self._pipeline_label)
         right_layout.addWidget(self._calibration_label)
+        right_layout.addWidget(self._debug3d_label)
         right_layout.addStretch(1)
         right_panel.setLayout(right_layout)
         self._right_panel = right_panel
@@ -169,7 +181,8 @@ class WhiteboardWindow(QMainWindow):
         self._touch_cal_button = QPushButton("접촉 캘리브레이션 (T)")
         self._touch_cal_button.clicked.connect(self._on_touch_calibrate_clicked)
 
-        # 3D 접촉 판정 근거(평면 수선 벡터·높이 게이지·수치)를 영상 위에 겹쳐 본다.
+        # 3D 접촉 판정 근거: 평면 수선 벡터·높이 게이지(그래픽)는 영상 위에 겹쳐 그리고,
+        # 수치 요약(우상단 패널에 해당하던 내용)은 우측 self._debug3d_label로 따로 본다.
         self._debug3d_button = QPushButton("3D 디버그 (D)")
         self._debug3d_button.setCheckable(True)
         self._debug3d_button.setChecked(self._session.debug_3d)
@@ -196,6 +209,11 @@ class WhiteboardWindow(QMainWindow):
             self._save_button,
             quit_button,
         ):
+            # QPushButton은 기본적으로 키보드 포커스를 받고, 포커스가 있는 상태에서
+            # SPACE/Enter를 누르면 keyPressEvent()에 도달하기 전에 버튼 자신의
+            # click()을 먼저 실행해버린다 (예: 종료 버튼이 포커스를 가지면 SPACE로
+            # 캘리브레이션 점을 찍으려다 앱이 종료됨). 단축키는 keyPressEvent()에서
+            # 중앙집중식으로 처리하므로 버튼은 마우스 클릭 전용으로 고정한다.
             button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             buttons.addWidget(button)
 
@@ -334,6 +352,7 @@ class WhiteboardWindow(QMainWindow):
         self._update_debug_labels(debug)
         self._update_pipeline_label(debug)
         self._update_calibration_label()
+        self._update_debug3d_label(debug)
 
     def _update_canvas_view(self) -> None:
         canvas = self._session.canvas
@@ -416,6 +435,61 @@ class WhiteboardWindow(QMainWindow):
                 color = "#333333"
         self._calibration_label.setText(text)
         self._calibration_label.setStyleSheet(f"color: {color};")
+
+    def _update_debug3d_label(self, debug: SessionDebug) -> None:
+        """controller/overlay.py의 draw_3d_debug() 우상단 패널과 같은 정보를 Qt 라벨로.
+
+        영상 위에 굽지 않고(WhiteboardSession(render_3d_debug_inline=False)) 여기서
+        그리는 이유는 화면을 키우면 그 텍스트 박스가 실제 손 위치를 덮어버렸기 때문.
+        """
+        if not debug.debug_3d:
+            self._debug3d_label.setText("")
+            return
+        if debug.height_mm is None or debug.plane_xy_mm is None:
+            # draw_3d_debug()의 "OFF/실패 사유" 분기와 동일한 이유를 보여준다.
+            if not debug.has_3d_contact:
+                reason = "3D DEBUG: OFF\n(4점 캘리브레이션 + 평면 크기 + intrinsics 필요, K)"
+            elif debug.contact_last_error_px is not None:
+                reason = (
+                    f"3D DEBUG: 손 재투영 오차 {debug.contact_last_error_px:.0f}px"
+                    f" > {MAX_REPROJECTION_ERROR_PX:.0f}px 문턱\n(pen_ratio로 폴백)"
+                )
+            else:
+                reason = "3D DEBUG: 이번 프레임 자세 추정 실패\n(pen_ratio로 폴백)"
+            self._debug3d_label.setText(reason)
+            self._debug3d_label.setStyleSheet(
+                "font-family: Consolas, 'DejaVu Sans Mono', monospace; font-size: 11px; color: #cc2222;"
+            )
+            return
+
+        plane_w, plane_h = debug.plane_size_mm or (0.0, 0.0)
+        plane_x, plane_y = debug.plane_xy_mm
+        inside = debug.contact_inside_plane
+        zero_text = f"{debug.zero_offset_mm:+.1f} mm" if debug.zero_offset_mm is not None else "n/a (T)"
+        lines = [
+            "3D DEBUG",
+            f"height     {debug.height_mm:+.1f} mm",
+            f"raw height {debug.raw_height_mm:+.1f} mm" if debug.raw_height_mm is not None else "raw height n/a",
+            f"zero offs  {zero_text}",
+            (
+                f"thresh d/u {debug.contact_down_mm:.1f} / {debug.contact_up_mm:.1f} mm"
+                if debug.contact_down_mm is not None and debug.contact_up_mm is not None
+                else "thresh d/u n/a"
+            ),
+            f"plane XY   {plane_x:.0f}, {plane_y:.0f} of {plane_w:.0f}x{plane_h:.0f}"
+            + ("" if inside else "  OUT"),
+            (
+                f"hand reproj {debug.contact_reprojection_error_px:.1f} px"
+                if debug.contact_reprojection_error_px is not None
+                else "hand reproj n/a"
+            ),
+            f"source {debug.contact_source}   contact {'YES' if debug.instant_pen_down else 'no'}",
+        ]
+        self._debug3d_label.setText("\n".join(lines))
+        color = "#cc2222" if inside is False else "#333333"
+        self._debug3d_label.setStyleSheet(
+            f"font-family: Consolas, 'DejaVu Sans Mono', monospace; font-size: 11px; color: {color};"
+        )
 
     def _save_canvas(self) -> None:
         saved = self._session.save_canvas(
