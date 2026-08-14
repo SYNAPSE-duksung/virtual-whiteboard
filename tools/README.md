@@ -56,7 +56,8 @@ python -m tools.extract_landmarks
 
 - 개별 파일/폴더 지정, `--overwrite`(기존 결과 덮어쓰기)도 가능합니다.
 - 옵션: `--min-cutoff`, `--beta` (One Euro Filter 파라미터), `--pen-down-thresh`, `--pen-up-thresh` (pen 판정 히스테리시스 임계값), `--min-detection-confidence`/`--min-tracking-confidence` (MediaPipe 신뢰도 — 손 검출률이 낮게 나오면 `--min-detection-confidence 0.5 --overwrite`로 재추출해 보세요).
-- CSV 스키마는 `core/recorder.py`의 `CSV_COLUMNS`에 `video_id`(마지막 컬럼, 값=base명, 예: `minjin_bright_slow_01`)가 추가된 형태입니다: `frame_id, timestamp, hand_detected, raw_x, raw_y, raw_z, filtered_x, filtered_y, pen_ratio, pen_down, video_id`. `video_id`는 여러 영상의 CSV를 합칠 때 영상을 구분하고, 시계열 feature(속도/가속도/저크) 계산 시 프레임 순서를 보존하며, 클립 단위로 train/test를 분리하는 데 씁니다.
+- `--calibration output/calibration.json` — 4점 캘리브레이션을 지정하면 `rectified_x`/`rectified_y`(필기 평면 기준 정류 좌표)와 `in_bounds`(평면 안쪽 여부는 pen_down 컬럼에는 반영되지 않고 좌표만 채워짐) 컬럼까지 함께 계산합니다. 지정하지 않으면 두 컬럼은 기존처럼 빈 값입니다. **듀얼 카메라 글자 복원 계획**(`CLAUDE.md` 참고)의 `tools/reconstruct_stroke.py`가 이 컬럼을 입력으로 씁니다.
+- CSV 스키마는 `core/recorder.py`의 `CSV_COLUMNS`에 `video_id`(마지막 컬럼, 값=base명, 예: `minjin_bright_slow_01`)가 추가된 형태입니다: `frame_id, timestamp, hand_detected, raw_x, raw_y, raw_z, filtered_x, filtered_y, pen_ratio, pen_down, rectified_x, rectified_y, video_id`. `video_id`는 여러 영상의 CSV를 합칠 때 영상을 구분하고, 시계열 feature(속도/가속도/저크) 계산 시 프레임 순서를 보존하며, 클립 단위로 train/test를 분리하는 데 씁니다.
 - `frame_id`는 main 영상의 프레임 번호이며, 같은 회차의 `_frames.csv`(타임스탬프 + main/side 수신 여부)를 매개로 측면 영상 프레임과 정렬됩니다. 측면 영상으로 라벨링한 결과를 이 기준으로 매칭하면 됩니다.
 
 ## 6. label_frames 사용법
@@ -73,7 +74,41 @@ python -m tools.label_frames
 - **출력**: `{base}_labels.csv` (`video_id, frame_id, pen_down`, 프레임당 1행). `{base}_coords.csv`와 `video_id + frame_id`로 조인하면 학습 데이터가 완성됩니다. 기존 라벨 파일이 있으면 불러와 이어서 편집합니다.
 - **참고**: 프레임 누락이 있어도 `_frames.csv`를 매개로 전역 frame_index에 정렬되므로 coords와 어긋나지 않습니다.
 
-## 7. calibrate 사용법 (A, 4주차)
+## 7. reconstruct_stroke 사용법 (듀얼 카메라 글자 복원, 7주차)
+
+메인(노트북) 카메라의 궤적(정류 좌표)과 측면(폰) 카메라의 자동 pen up/down 신호를
+타임스탬프로 결합해 손글씨를 복원하는 도구입니다. 자세한 배경·설계는 `CLAUDE.md`의
+"듀얼 카메라 기반 pen up/down 개선 + 글자 복원 실험 계획" 참고.
+
+**사전 준비**:
+1. `record_dual`로 `{base}_main.mp4`/`{base}_side.mp4`/`{base}_frames.csv`를 녹화
+2. `python -m tools.extract_landmarks --calibration output/calibration.json`으로
+   `{base}_coords.csv`에 정류 좌표(`rectified_x`/`rectified_y`)까지 포함해 추출
+   (`--calibration` 없이 추출한 기존 CSV는 이 컬럼이 비어 있어 그대로 쓸 수 없습니다 —
+   `--overwrite`로 재추출하세요)
+
+```
+python -m tools.reconstruct_stroke
+```
+
+- `data/dataset/recordings/`의 모든 `*_side.mp4`를 훑어 `{base}_reconstructed.png`
+  (흰 배경, 검은 잉크)를 만듭니다.
+- **측면 기준선**: 책상면을 나타내는 직선을 처음 한 번 지정해야 합니다. 저장된
+  `output/side_baseline.json`이 없으면 첫 영상의 첫 프레임에서 마우스로 책상 가장자리
+  위 2점을 클릭 → `Enter`/`s`로 확정(`z` 취소, `Esc` 중단). `--save-baseline`으로
+  저장해두면 같은 카메라 구도에서 다음 실행 때 재사용됩니다. 카메라를 옮겼다면
+  `--recalibrate-baseline`으로 다시 지정하세요.
+- **헤드리스 지정**: `--baseline X1 Y1 X2 Y2`로 클릭 없이 좌표를 직접 줄 수도 있습니다.
+- **접촉 문턱**: `--down-px`/`--up-px`(기본 20/35px)는 카메라-책상 거리·해상도에 따라
+  달라지는 임시값입니다. 실측 후 `core.touch_calibration.estimate_thresholds()`로
+  hover/touch 표본 기반 재추정을 적용하는 것이 다음 단계입니다.
+- **품질 확인**: `--ocr`을 주면 복원 결과를 EasyOCR로 인식해 텍스트를 출력합니다
+  (`easyocr` 설치 필요, 기본은 꺼져 있어 무거운 모델 로드를 하지 않습니다). 원문과
+  비교해 복원이 되는지(CLAUDE.md 계획의 1단계 판단 기준)를 정량적으로 확인하세요.
+- **출력 요약**: 실행 후 콘솔에 메인 CSV 행 수, 측면 프레임 수·검출률·pen-down 비율,
+  잘라낸 stroke 개수가 출력됩니다.
+
+## 8. calibrate 사용법 (A, 4주차)
 
 책상 위 필기 영역의 네 모서리(사선 각도로 찍힌 사다리꼴)를 클릭으로 지정해, 위에서 내려다본 것처럼 반듯하게 펴는 투시 변환(`cv2.getPerspectiveTransform`/`warpPerspective`)을 계산·저장하는 도구입니다.
 
@@ -85,10 +120,10 @@ python -m tools.calibrate
 - **키**: `z` 마지막 점 취소, `r` 전체 리셋, `p` 정류(bird's-eye) 미리보기 창 토글(4점 완료 후), `s` 저장, `q` 종료.
 - **출력**: `output/calibration.json` (경로는 `--output`으로 변경 가능). 정류 캔버스 크기(`dst_size`)는 지정하지 않으면 원본 사각형의 변 길이로 자동 추정됩니다(비율 보존).
 - **재사용**: `core.geometry.PerspectiveCalibration.load("output/calibration.json")`으로 다른 스크립트에서 그대로 불러와 `warp_frame()`(이미지 정류), `to_rectified()`/`from_rectified()`(좌표 매핑), `contains()`(점이 필기 영역 안인지) 등을 쓸 수 있습니다.
-- **판정 파이프라인 연결됨**: `controller.main.WhiteboardSession`이 세션 시작 시 `output/calibration.json`을 자동 로드하고, `core.PenTracker`가 `contains()`로 손끝이 평면 밖일 때 pen_ratio 판정과 무관하게 강제 pen up으로 게이팅한다(⚠️ 2D 평면 범위 판정이며 진짜 3D 접촉/높이 판정은 아님 — `core/pen_tracker.py` docstring 참고). `extract_landmarks.py`(D의 오프라인 CSV 추출)에는 아직 연결되지 않았고, 그 방향은 여전히 8절 협의 대상입니다.
-- **재캘리브레이션**: `controller/main.py` 데모는 캘리브레이션이 없으면(최초 실행) 시작 시 자동으로 지정을 강제하고, 이후에는 `K` 키로 언제든 다시 캘리브레이션할 수 있습니다(적용 전까지 기존 캘리브레이션은 유지). 카메라 위치·화각이 바뀌면 재캘리브레이션이 필요합니다 — 촬영 세션마다 언제 다시 찍을지는 8절 협의 대상입니다.
+- **판정 파이프라인 연결됨**: `controller.main.WhiteboardSession`이 세션 시작 시 `output/calibration.json`을 자동 로드하고, `core.PenTracker`가 `contains()`로 손끝이 평면 밖일 때 pen_ratio 판정과 무관하게 강제 pen up으로 게이팅한다(⚠️ 2D 평면 범위 판정이며 진짜 3D 접촉/높이 판정은 아님 — `core/pen_tracker.py` docstring 참고). `extract_landmarks.py`(D의 오프라인 CSV 추출)는 `--calibration`을 지정하면 정류 좌표까지 함께 뽑도록 연결됐다(7절 `reconstruct_stroke` 참고).
+- **재캘리브레이션**: `controller/main.py` 데모는 캘리브레이션이 없으면(최초 실행) 시작 시 자동으로 지정을 강제하고, 이후에는 `K` 키로 언제든 다시 캘리브레이션할 수 있습니다(적용 전까지 기존 캘리브레이션은 유지). 카메라 위치·화각이 바뀌면 재캘리브레이션이 필요합니다 — 촬영 세션마다 언제 다시 찍을지는 9절 협의 대상입니다.
 
-## 8. [제안 — D와 페어세션에서 확정] 캘리브레이션 데이터 협의 초안
+## 9. [제안 — D와 페어세션에서 확정] 캘리브레이션 데이터 협의 초안
 
 > 이 절은 A가 실제로 D와 만나 확정한 내용이 아니라, **페어세션에서 논의할 안건을 미리 정리한 초안**입니다. 세션 후 합의된 내용으로 이 절을 덮어써 주세요.
 

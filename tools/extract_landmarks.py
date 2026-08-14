@@ -7,7 +7,10 @@
 1. ``{base}_coords.csv`` — 손끝(검지, 8번) 좌표·pen_ratio·pen_down 등 기존 판정용 스키마
    (``CSV_COLUMNS + video_id``). A의 라이브 수집 CSV(``core.recorder``가 그대로 쓰는 순정
    ``CSV_COLUMNS``)와는 마지막의 ``video_id`` 컬럼 하나만 다르며, 값은 영상 파일 base명
-   (예: ``minjin_bright_slow_01``)이다.
+   (예: ``minjin_bright_slow_01``)이다. ``--calibration``을 지정하면
+   ``rectified_x``/``rectified_y``(``PerspectiveCalibration.to_rectified()`` 결과, 필기
+   평면 기준 정류 좌표)도 함께 채워진다 — 듀얼 카메라 글자 복원 계획(CLAUDE.md 참고)의
+   1단계 산출물. 지정하지 않으면 기존과 동일하게 빈 값으로 남는다.
 2. ``{base}_landmarks.csv`` — 손 랜드마크 21개 전체의 MediaPipe 정규화 좌표
    (``frame_id, timestamp, hand_detected, x0, y0, z0, …, x20, y20, z20, video_id``,
    총 3+63+1=67열). D파트가 각도 변화·속도·저크 등 kinematic feature를 손끝 한 점이
@@ -43,6 +46,8 @@
   python -m tools.extract_landmarks --min-detection-confidence 0.5 --overwrite
       손 검출률이 낮을 때 검출 신뢰도 임계값을 낮춰 재추출
       (녹화 전 각도 점검은 record_dual의 "검출 테스트" 버튼 사용)
+  python -m tools.extract_landmarks --calibration output/calibration.json --overwrite
+      저장된 4점 캘리브레이션으로 정류 좌표(rectified_x/y)까지 함께 추출
 """
 
 from __future__ import annotations
@@ -55,6 +60,7 @@ import cv2
 
 try:
     from core.filters import FingertipSmoother
+    from core.geometry import DEFAULT_CALIBRATION_PATH, PerspectiveCalibration
     from core.pen_state import INDEX_TIP, PenStateDetector, compute_pen_ratio, is_open_hand
     from core.pen_tracker import PenFrame
     from core.recorder import CSV_COLUMNS, CoordSample
@@ -84,7 +90,7 @@ def _fmt(value: float | None, spec: str) -> str:
 
 
 def _coord_row(frame_id: int, timestamp: float, sample: CoordSample, video_id: str) -> list[object]:
-    """``CoordRecorder.write()``와 자릿수까지 동일한 한 행 + ``video_id``를 만든다."""
+    """``CoordRecorder.write()``와 자릿수까지 동일한 한 행(정류 좌표 포함) + ``video_id``를 만든다."""
     return [
         frame_id,
         f"{timestamp:.6f}",
@@ -96,6 +102,8 @@ def _coord_row(frame_id: int, timestamp: float, sample: CoordSample, video_id: s
         _fmt(sample.filtered_y, ".2f"),
         _fmt(sample.pen_ratio, ".4f"),
         int(sample.pen_down),
+        _fmt(sample.rectified_x, ".2f"),
+        _fmt(sample.rectified_y, ".2f"),
         video_id,
     ]
 
@@ -177,7 +185,12 @@ def _frames_csv_path(video_path: Path) -> Path:
     return video_path.with_name(f"{_video_base(video_path)}_frames.csv")
 
 
-def process_video(video_path: Path, *, args: argparse.Namespace) -> None:
+def process_video(
+    video_path: Path,
+    *,
+    args: argparse.Namespace,
+    calibration: "PerspectiveCalibration | None" = None,
+) -> None:
     out_path = _output_path(video_path)
     landmarks_path = _landmarks_output_path(video_path)
     if out_path.exists() and landmarks_path.exists() and not args.overwrite:
@@ -263,6 +276,14 @@ def process_video(video_path: Path, *, args: argparse.Namespace) -> None:
                     else:
                         pen_down = pen_state.update(pen_ratio)
 
+                    # calibration이 없으면(기본) 게이팅·정류 비활성 — CSV 컬럼은 빈 값으로 남는다.
+                    in_bounds = None
+                    rectified = None
+                    if calibration is not None:
+                        in_bounds = calibration.contains((raw_x, raw_y))
+                        rx, ry = calibration.to_rectified((raw_x, raw_y))
+                        rectified = (float(rx), float(ry))
+
                     pen_frame = PenFrame(
                         hand_detected=True,
                         fingertip=fingertip,
@@ -271,10 +292,8 @@ def process_video(video_path: Path, *, args: argparse.Namespace) -> None:
                         pen_down=pen_down,
                         erase_gesture=erase_gesture,
                         pen_ratio=pen_ratio,
-                        # 이 도구는 오프라인 영상에서 추출만 하므로 평면 캘리브레이션이 없다
-                        # (None = 게이팅·정류 비활성). CSV 컬럼은 빈 값으로 남는다.
-                        in_bounds=None,
-                        rectified=None,
+                        in_bounds=in_bounds,
+                        rectified=rectified,
                     )
                     normalized_landmarks = landmarks
 
@@ -302,9 +321,10 @@ def process_video(video_path: Path, *, args: argparse.Namespace) -> None:
 
     detect_rate = (hand_detected_frames / total_frames * 100) if total_frames else 0.0
     pen_down_rate = (pen_down_frames / total_frames * 100) if total_frames else 0.0
+    cal_note = " | rectified 포함" if calibration is not None else ""
     print(
         f"[완료] {video_path.name} -> {out_path.name}, {landmarks_path.name} | "
-        f"프레임 {total_frames} | 손 검출률 {detect_rate:.1f}% | pen-down 비율 {pen_down_rate:.1f}%"
+        f"프레임 {total_frames} | 손 검출률 {detect_rate:.1f}% | pen-down 비율 {pen_down_rate:.1f}%{cal_note}"
     )
 
 
@@ -334,7 +354,25 @@ def main() -> int:
     parser.add_argument(
         "--overwrite", action="store_true", help="기존 _coords.csv/_landmarks.csv가 있어도 재생성"
     )
+    parser.add_argument(
+        "--calibration",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help=(
+            "4점 캘리브레이션 파일 경로(예: output/calibration.json). 지정하면 "
+            "rectified_x/rectified_y(정류 좌표)·in_bounds를 함께 채운다. 미지정 시 "
+            "기존과 동일하게 빈 값(게이팅·정류 비활성)"
+        ),
+    )
     args = parser.parse_args()
+
+    calibration: PerspectiveCalibration | None = None
+    if args.calibration is not None:
+        try:
+            calibration = PerspectiveCalibration.load(args.calibration)
+        except (FileNotFoundError, OSError, ValueError, KeyError, TypeError) as exc:
+            print(f"[경고] 캘리브레이션을 읽을 수 없어 정류 좌표 없이 진행합니다: {exc}")
 
     videos = _find_main_videos(args.paths)
     if not videos:
@@ -342,7 +380,7 @@ def main() -> int:
         return 1
 
     for video_path in videos:
-        process_video(video_path, args=args)
+        process_video(video_path, args=args, calibration=calibration)
 
     return 0
 
