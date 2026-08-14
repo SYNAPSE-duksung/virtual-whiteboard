@@ -7,6 +7,7 @@
 - **`record_dual.py`**: 메인(사선) + 측면(스마트폰) 카메라를 동시에 모니터링하며 녹화하는 PyQt GUI 도구입니다.
 - **`extract_landmarks.py`**: `record_dual`로 찍은 main 영상에서 오프라인으로 랜드마크·pen_ratio·pen_down을 뽑아 학습용 CSV를 만듭니다.
 - **`label_frames.py`**: 측면 영상을 보며 pen down/up 정답 라벨을 토글 방식으로 매기는 GUI 도구입니다.
+- **`estimate_camera_offset.py`** (7주차): 메인·측면 영상의 손 움직임을 상호상관해 `label_frames.py`의 카메라 지연 오프셋을 자동 추정합니다.
 - **`calibrate.py`** (A, 4주차): 카메라로 책상 위 필기 영역의 네 모서리를 클릭해 `core.geometry.PerspectiveCalibration`을 계산·저장하는 독립 실행 도구입니다. 같은 4점 지정 로직(`core.geometry.CalibrationPicker`)이 `controller/main.py`(OpenCV 데모, `K` 키)에도 내장되어 있어 세션 안에서 바로 (재)캘리브레이션할 수 있습니다.
 - **`validate_normalization.py`**, **`validate_z_axis.py`** (A, 3주차): 합성 3D 손 모델로 정규화 수식·Z축 임계값을 실촬영 없이 검증하는 스크립트입니다. D 데이터가 쌓이면 같은 프레임워크(`RatioSpec`)에 실데이터를 물려 ROC까지 확장할 수 있습니다.
 
@@ -74,7 +75,39 @@ python -m tools.label_frames
 - **출력**: `{base}_labels.csv` (`video_id, frame_id, pen_down`, 프레임당 1행). `{base}_coords.csv`와 `video_id + frame_id`로 조인하면 학습 데이터가 완성됩니다. 기존 라벨 파일이 있으면 불러와 이어서 편집합니다.
 - **참고**: 프레임 누락이 있어도 `_frames.csv`를 매개로 전역 frame_index에 정렬되므로 coords와 어긋나지 않습니다.
 
-## 7. reconstruct_stroke 사용법 (듀얼 카메라 글자 복원, 7주차)
+## 7. estimate_camera_offset 사용법 (카메라 지연 자동 추정, 7주차)
+
+`label_frames.py`의 "지연 오프셋(프레임)" 스핀박스를 눈으로 맞추는 대신, 메인·측면 각
+영상의 손 움직임을 상호상관(cross-correlation)해 자동으로 추정합니다. 박수 같은 동기화
+마커가 없어도 되고(촬영 내내 일어나는 자연스러운 손 움직임 자체가 동기화 신호), 첫
+toggle을 마커로 쓰려는 시도가 구조적으로 안 되는 이유(측면에서 본 toggle에 대응하는
+"메인에서 본 같은 순간"을 눈으로 찾을 수 없음)를 아예 피해갑니다.
+
+```
+python -m tools.estimate_camera_offset 이름_조명_속도_회차 --save
+```
+
+- 인자 없이 실행하면 `data/dataset/recordings/` 아래 모든 `*_main.mp4`를 일괄 처리합니다.
+- **원리**: 메인·측면 각 영상에 독립적인 `HandTracker`를 돌려(같은 인스턴스를 두 스트림에
+  번갈아 먹이면 내부 트래킹 상태가 섞이므로 반드시 분리) 검지 끝의 정규화 좌표 기준
+  프레임간 변위(움직임 크기) 시계열을 뽑고, 균일 시간축으로 리샘플한 뒤 상호상관으로
+  가장 잘 겹치는 시차를 찾습니다.
+- **출력값은 `label_frames.py`의 오프셋과 정의가 정확히 같습니다**
+  (`g = side_map[k] - offset`). `--save`를 주면 `labeling_offsets.json`에 바로 기록되어
+  `label_frames.py`를 열 때 자동 복원됩니다.
+- **신뢰도 확인**: 결과에 정규화 상관계수(-1~1)가 함께 출력됩니다. **0.3 미만이면 낮은
+  신뢰도로 경고**가 뜨니 그런 영상은 `label_frames.py`에서 육안으로 검산하세요. 손이 오래
+  멈춰 있거나 움직임이 단조로운 영상에서 특히 낮게 나올 수 있습니다.
+- **`--plot`**: 정렬 전/후 신호와 lag별 상관계수 그래프(`{base}_offset_debug.png`)를 함께
+  저장합니다. 추정이 못 미더울 때 왜 그런 값이 나왔는지 눈으로 확인할 수 있습니다.
+- **검색 범위**: 기본 `--max-lag-sec 2.0`(±2초). 실제 지연이 이보다 크면 못 잡으니, 결과의
+  `offset_frames_unclamped`가 스핀박스 범위(±30프레임)를 벗어난다는 경고가 뜨면
+  `--max-lag-sec`를 늘려 재시도하세요.
+- 같은 촬영 세션·같은 물리적 연결(폰 위치·케이블/Iriun 설정 안 바꿈)이면 오프셋을 세션
+  전체 영상에 재사용해도 된다는 게 이 프로젝트의 기존 가정입니다 — 처음 몇 개만
+  `label_frames.py`에서 교차 확인한 뒤, 나머지는 이 도구로 일괄 처리해도 됩니다.
+
+## 8. reconstruct_stroke 사용법 (듀얼 카메라 글자 복원, 7주차)
 
 메인(노트북) 카메라의 궤적(정류 좌표)과 측면(폰) 카메라의 자동 pen up/down 신호를
 타임스탬프로 결합해 손글씨를 복원하는 도구입니다. 자세한 배경·설계는 `CLAUDE.md`의
@@ -108,7 +141,7 @@ python -m tools.reconstruct_stroke
 - **출력 요약**: 실행 후 콘솔에 메인 CSV 행 수, 측면 프레임 수·검출률·pen-down 비율,
   잘라낸 stroke 개수가 출력됩니다.
 
-## 8. calibrate 사용법 (A, 4주차)
+## 9. calibrate 사용법 (A, 4주차)
 
 책상 위 필기 영역의 네 모서리(사선 각도로 찍힌 사다리꼴)를 클릭으로 지정해, 위에서 내려다본 것처럼 반듯하게 펴는 투시 변환(`cv2.getPerspectiveTransform`/`warpPerspective`)을 계산·저장하는 도구입니다.
 
@@ -120,10 +153,10 @@ python -m tools.calibrate
 - **키**: `z` 마지막 점 취소, `r` 전체 리셋, `p` 정류(bird's-eye) 미리보기 창 토글(4점 완료 후), `s` 저장, `q` 종료.
 - **출력**: `output/calibration.json` (경로는 `--output`으로 변경 가능). 정류 캔버스 크기(`dst_size`)는 지정하지 않으면 원본 사각형의 변 길이로 자동 추정됩니다(비율 보존).
 - **재사용**: `core.geometry.PerspectiveCalibration.load("output/calibration.json")`으로 다른 스크립트에서 그대로 불러와 `warp_frame()`(이미지 정류), `to_rectified()`/`from_rectified()`(좌표 매핑), `contains()`(점이 필기 영역 안인지) 등을 쓸 수 있습니다.
-- **판정 파이프라인 연결됨**: `controller.main.WhiteboardSession`이 세션 시작 시 `output/calibration.json`을 자동 로드하고, `core.PenTracker`가 `contains()`로 손끝이 평면 밖일 때 pen_ratio 판정과 무관하게 강제 pen up으로 게이팅한다(⚠️ 2D 평면 범위 판정이며 진짜 3D 접촉/높이 판정은 아님 — `core/pen_tracker.py` docstring 참고). `extract_landmarks.py`(D의 오프라인 CSV 추출)는 `--calibration`을 지정하면 정류 좌표까지 함께 뽑도록 연결됐다(7절 `reconstruct_stroke` 참고).
-- **재캘리브레이션**: `controller/main.py` 데모는 캘리브레이션이 없으면(최초 실행) 시작 시 자동으로 지정을 강제하고, 이후에는 `K` 키로 언제든 다시 캘리브레이션할 수 있습니다(적용 전까지 기존 캘리브레이션은 유지). 카메라 위치·화각이 바뀌면 재캘리브레이션이 필요합니다 — 촬영 세션마다 언제 다시 찍을지는 9절 협의 대상입니다.
+- **판정 파이프라인 연결됨**: `controller.main.WhiteboardSession`이 세션 시작 시 `output/calibration.json`을 자동 로드하고, `core.PenTracker`가 `contains()`로 손끝이 평면 밖일 때 pen_ratio 판정과 무관하게 강제 pen up으로 게이팅한다(⚠️ 2D 평면 범위 판정이며 진짜 3D 접촉/높이 판정은 아님 — `core/pen_tracker.py` docstring 참고). `extract_landmarks.py`(D의 오프라인 CSV 추출)는 `--calibration`을 지정하면 정류 좌표까지 함께 뽑도록 연결됐다(8절 `reconstruct_stroke` 참고).
+- **재캘리브레이션**: `controller/main.py` 데모는 캘리브레이션이 없으면(최초 실행) 시작 시 자동으로 지정을 강제하고, 이후에는 `K` 키로 언제든 다시 캘리브레이션할 수 있습니다(적용 전까지 기존 캘리브레이션은 유지). 카메라 위치·화각이 바뀌면 재캘리브레이션이 필요합니다 — 촬영 세션마다 언제 다시 찍을지는 10절 협의 대상입니다.
 
-## 9. [제안 — D와 페어세션에서 확정] 캘리브레이션 데이터 협의 초안
+## 10. [제안 — D와 페어세션에서 확정] 캘리브레이션 데이터 협의 초안
 
 > 이 절은 A가 실제로 D와 만나 확정한 내용이 아니라, **페어세션에서 논의할 안건을 미리 정리한 초안**입니다. 세션 후 합의된 내용으로 이 절을 덮어써 주세요.
 
