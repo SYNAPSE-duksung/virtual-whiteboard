@@ -105,7 +105,14 @@ class RatioBar(QWidget):
 
 class WhiteboardWindow(QMainWindow):
 
-    def __init__(self, camera_index: int, *, mirror: bool = False) -> None:
+    def __init__(
+        self,
+        camera_index: int,
+        *,
+        mirror: bool = False,
+        side_camera_index: int | None = None,
+        side_baseline_path: str | None = None,
+    ) -> None:
         super().__init__()
         self.setWindowTitle("Virtual Whiteboard")
 
@@ -113,11 +120,31 @@ class WhiteboardWindow(QMainWindow):
         if not self._camera.isOpened():
             raise RuntimeError(f"카메라 {camera_index}을(를) 열 수 없습니다.")
         self._mirror = mirror
-        self._session = WhiteboardSession()
+
+        # 측면(폰) 카메라는 선택 사항이다. 여기서는 값을 그대로 보여주기만 하고, 기준선
+        # 대화형 지정(2점 클릭)은 아직 이 창에서 지원하지 않는다 — 4점/터치 캘리브레이션과
+        # 마찬가지로 controller/main.py의 OpenCV 데모(B 키)에서 한 번 잡아 저장해두면
+        # (output/side_baseline.json) 이 창은 그걸 자동으로 불러와 쓴다.
+        self._side_camera = None
+        if side_camera_index is not None:
+            self._side_camera = cv2.VideoCapture(side_camera_index)
+            if not self._side_camera.isOpened():
+                raise RuntimeError(f"측면 카메라 {side_camera_index}을(를) 열 수 없습니다.")
+
+        session_kwargs = {}
+        if side_baseline_path is not None:
+            session_kwargs["side_baseline_path"] = side_baseline_path
+        self._session = WhiteboardSession(**session_kwargs)
 
         self._video = QLabel("카메라 대기 중...")
         self._video.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._video.setMinimumSize(640, 480)
+
+        self._side_video: QLabel | None = None
+        if self._side_camera is not None:
+            self._side_video = QLabel("측면 카메라 대기 중...")
+            self._side_video.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self._side_video.setMinimumSize(320, 240)
 
         canvas_title = QLabel("캔버스")
         self._canvas_view = QLabel("캔버스 대기 중...")
@@ -185,6 +212,8 @@ class WhiteboardWindow(QMainWindow):
 
         top_layout = QHBoxLayout()
         top_layout.addWidget(self._video, stretch=1)
+        if self._side_video is not None:
+            top_layout.addWidget(self._side_video, stretch=0)
         top_layout.addWidget(self._right_panel, stretch=0)
 
         layout = QVBoxLayout()
@@ -245,7 +274,15 @@ class WhiteboardWindow(QMainWindow):
         if self._mirror:
             frame = cv2.flip(frame, 1)
 
-        annotated = self._session.process_frame(frame)
+        side_frame = None
+        if self._side_camera is not None:
+            side_ok, side_frame = self._side_camera.read()
+            if not side_ok:
+                side_frame = None
+
+        annotated = self._session.process_frame(frame, side_frame=side_frame)
+        if self._side_video is not None and side_frame is not None:
+            self._update_side_video(self._session.render_side_frame(side_frame))
         status = f"[{self._session.mode_name}] {self._session.status}"
         if self._session.is_recording:
             status += "  ● REC"
@@ -266,6 +303,20 @@ class WhiteboardWindow(QMainWindow):
         debug = self._session.debug
         self._ratio_bar.set_debug(debug)
         self._update_debug_labels(debug)
+
+    def _update_side_video(self, side_annotated) -> None:
+        if self._side_video is None:
+            return
+        rgb = cv2.cvtColor(side_annotated, cv2.COLOR_BGR2RGB)
+        height, width, _ = rgb.shape
+        image = QImage(rgb.data, width, height, 3 * width, QImage.Format.Format_RGB888)
+        self._side_video.setPixmap(
+            QPixmap.fromImage(image).scaled(
+                self._side_video.size(),
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+        )
 
     def _update_canvas_view(self) -> None:
         canvas = self._session.canvas
@@ -307,6 +358,12 @@ class WhiteboardWindow(QMainWindow):
             if debug.height_mm is not None:
                 # 3D 판정 중이면 판정에 실제로 쓰인 높이를 함께 보여준다 (Qt는 한글 표시 가능).
                 text += f"  |  높이 {debug.height_mm:+.1f}mm"
+            if debug.has_side_contact:
+                if debug.side_distance_px is not None:
+                    side_state = "접촉" if debug.side_pen_down else "비접촉"
+                    text += f"  |  측면 {debug.side_distance_px:.0f}px({side_state})"
+                else:
+                    text += "  |  측면 손 미검출"
             self._status_label2.setText(text)
             self._status_label2.setStyleSheet(
                 "color: #1a8a3c;" if debug.stable_pen_down else "color: #555555;"
@@ -322,6 +379,8 @@ class WhiteboardWindow(QMainWindow):
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802 (Qt naming)
         self._timer.stop()
         self._camera.release()
+        if self._side_camera is not None:
+            self._side_camera.release()
         self._session.close()
         super().closeEvent(event)
 
@@ -334,10 +393,30 @@ def main() -> int:
         action="store_true",
         help="flip the frame horizontally (selfie view; off by default for the desk view)",
     )
+    parser.add_argument(
+        "--side-camera",
+        type=int,
+        default=None,
+        metavar="N",
+        help="측면(폰) 카메라 장치 인덱스. 지정하면 두 번째 영상 창을 띄운다. 기준선은 "
+             "controller/main.py의 B 키로 미리 지정해 output/side_baseline.json에 "
+             "저장해둬야 접촉 판정에 반영된다 (이 창엔 대화형 지정 UI가 없음)",
+    )
+    parser.add_argument(
+        "--side-baseline",
+        type=str,
+        default=None,
+        help="측면 기준선 로드 경로 (기본 output/side_baseline.json)",
+    )
     args = parser.parse_args()
 
     app = QApplication(sys.argv)
-    window = WhiteboardWindow(args.camera, mirror=args.mirror)
+    window = WhiteboardWindow(
+        args.camera,
+        mirror=args.mirror,
+        side_camera_index=args.side_camera,
+        side_baseline_path=args.side_baseline,
+    )
     window.show()
     return app.exec()
 

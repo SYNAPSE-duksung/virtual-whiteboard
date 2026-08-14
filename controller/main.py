@@ -23,6 +23,13 @@ from core.contact3d import DEFAULT_PLANE_SIZE_MM, MAX_REPROJECTION_ERROR_PX
 from core.geometry import DEFAULT_CALIBRATION_PATH, CalibrationPicker, PerspectiveCalibration
 from core.pen_tracker import PenTracker
 from core.recorder import CoordRecorder, CoordSample
+from core.side_contact import (
+    DEFAULT_BASELINE_PATH,
+    DEFAULT_DOWN_PX as DEFAULT_SIDE_DOWN_PX,
+    DEFAULT_UP_PX as DEFAULT_SIDE_UP_PX,
+    SideBaseline,
+    SideBaselinePicker,
+)
 from core.touch_calibration import (
     DEFAULT_SAMPLE_SECONDS,
     TouchCalibrationError,
@@ -88,6 +95,10 @@ class SessionDebug:
     contact_down_mm: float | None = None  # 3D 접촉 문턱(내림), 3D 비활성 시 None
     contact_up_mm: float | None = None  # 3D 접촉 문턱(올림)
     zero_offset_mm: float | None = None  # 학습된 영점 (표면을 짚었을 때의 원시 높이)
+    has_side_contact: bool = False  # 측면 카메라 접촉 판정 사용 가능 여부(기준선 설정됨)
+    side_pen_down: bool | None = None  # 측면 신호 판정 결과(이번 프레임에 측면 손 검출됐을 때만)
+    side_distance_px: float | None = None  # 측면 손끝-기준선 원시 거리(px)
+    is_side_calibrating: bool = False  # 측면 기준선 지정 중인지
 
 
 class WhiteboardSession:
@@ -119,6 +130,9 @@ class WhiteboardSession:
         plane_size_mm: tuple[float, float] = DEFAULT_PLANE_SIZE_MM,
         frame_size: tuple[int, int] = (1280, 720),
         use_3d_contact: bool = True,
+        side_baseline_path: str | Path | None = DEFAULT_BASELINE_PATH,
+        side_down_px: float = DEFAULT_SIDE_DOWN_PX,
+        side_up_px: float = DEFAULT_SIDE_UP_PX,
     ) -> None:
         # 세션 시작 시 저장된 캘리브레이션을 1회 자동 로드한다. 없거나(최초 실행)
         # 손상됐으면 조용히 게이팅 없는 상태로 시작하고, 데모 루프가 `needs_calibration`을
@@ -143,6 +157,18 @@ class WhiteboardSession:
             else None
         )
 
+        # 측면(폰) 카메라 기준선도 캘리브레이션과 같은 방식으로 세션 시작 시 1회 자동 로드한다
+        # (저장돼 있으면 바로 활성화, 없으면 조용히 비활성 — B 키로 언제든 새로 지정 가능).
+        self._side_baseline_path = side_baseline_path
+        self._side_down_px = side_down_px
+        self._side_up_px = side_up_px
+        side_baseline: SideBaseline | None = None
+        if side_baseline_path is not None:
+            try:
+                side_baseline = SideBaseline.load(side_baseline_path)
+            except (FileNotFoundError, OSError, ValueError, KeyError, TypeError):
+                side_baseline = None
+
         self._tracker = PenTracker(
             min_cutoff=min_cutoff,
             beta=beta,
@@ -151,6 +177,9 @@ class WhiteboardSession:
             calibration=self._calibration,
             intrinsics=self._intrinsics,
             use_3d_contact=use_3d_contact,
+            side_baseline=side_baseline,
+            side_down_px=side_down_px,
+            side_up_px=side_up_px,
         )
         self._pen_down_thresh = pen_down_thresh
         self._pen_up_thresh = pen_up_thresh
@@ -199,6 +228,13 @@ class WhiteboardSession:
 
         # 3D 디버그 오버레이(수선 벡터 + 높이 눈금 + 수치 패널) 표시 여부.
         self._debug_3d = False
+
+        # 측면(폰) 카메라 기준선(책상면) 지정 진행 상태. 4점/터치 캘리브레이션과 마찬가지로
+        # 서로 동시에 진행할 수 없다(각 start_*가 서로를 확인해 거부).
+        self._side_calibrating = False
+        self._side_baseline_picker: SideBaselinePicker | None = None
+        self._side_message: str | None = None
+        self._side_message_ok = True
 
     @property
     def pen_requested(self) -> bool:
@@ -261,6 +297,10 @@ class WhiteboardSession:
             contact_down_mm=detector.down_mm if estimator is not None else None,
             contact_up_mm=detector.up_mm if estimator is not None else None,
             zero_offset_mm=estimator.zero_offset_mm if estimator is not None else None,
+            has_side_contact=self._tracker.has_side_contact,
+            side_pen_down=frame.side_pen_down if frame is not None else None,
+            side_distance_px=frame.side_distance_px if frame is not None else None,
+            is_side_calibrating=self._side_calibrating,
         )
 
     # ------------------------------------------------------------------
@@ -344,9 +384,9 @@ class WhiteboardSession:
         """캘리브레이션 모드로 진입한다. 이미 캘리브레이션이 있어도 재지정할 수 있다
         (``confirm_calibration()``으로 확정하기 전까지 기존 캘리브레이션은 그대로 유효).
 
-        터치 캘리브레이션과 동시에 진행할 수 없다 — 진행 중이면 무시된다.
+        터치 캘리브레이션·측면 기준선 지정과 동시에 진행할 수 없다 — 진행 중이면 무시된다.
         """
-        if self._touch_calibrating:
+        if self._touch_calibrating or self._side_calibrating:
             return
         self._calibrating = True
         self._calibration_picker = CalibrationPicker()
@@ -463,9 +503,9 @@ class WhiteboardSession:
     def start_touch_calibration(self) -> None:
         """터치 임계값 캘리브레이션을 시작한다: hover 단계부터.
 
-        4점 캘리브레이션과 동시에 진행할 수 없다 — 진행 중이면 무시된다.
+        4점 캘리브레이션·측면 기준선 지정과 동시에 진행할 수 없다 — 진행 중이면 무시된다.
         """
-        if self._calibrating:
+        if self._calibrating or self._side_calibrating:
             return
         self._touch_calibrating = True
         self._touch_phase = "hover"
@@ -587,6 +627,168 @@ class WhiteboardSession:
             self._canvas.pen_up()
         self._status = "PEN UP"
 
+    # ------------------------------------------------------------------
+    # 측면(폰) 카메라 기준선 지정
+    # ------------------------------------------------------------------
+    @property
+    def is_side_calibrating(self) -> bool:
+        return self._side_calibrating
+
+    @property
+    def has_side_contact(self) -> bool:
+        """측면 카메라 접촉 판정을 쓸 수 있는 상태인지(기준선 설정됨)."""
+        return self._tracker.has_side_contact
+
+    @property
+    def side_baseline_picker(self) -> SideBaselinePicker | None:
+        return self._side_baseline_picker
+
+    @property
+    def side_message(self) -> tuple[str, bool] | None:
+        return None if self._side_message is None else (self._side_message, self._side_message_ok)
+
+    def start_side_calibration(self) -> None:
+        """측면 기준선 지정 모드로 진입한다. 이미 기준선이 있어도 재지정할 수 있다.
+
+        4점/터치 캘리브레이션과 동시에 진행할 수 없다 — 진행 중이면 무시된다. 메인 카메라
+        판정과는 무관한 별도 물리 카메라이므로, 지정 중에도 메인 캔버스는 정상 동작한다
+        (``_tracker.reset()``을 부르지 않는 이유).
+        """
+        if self._calibrating or self._touch_calibrating:
+            return
+        self._side_calibrating = True
+        self._side_baseline_picker = SideBaselinePicker()
+        self._side_message = None
+        self._side_message_ok = True
+
+    def add_side_baseline_point(self, x: float, y: float) -> None:
+        """측면 기준선 지정 모드일 때만 좌표를 점으로 추가한다 (그 외엔 무시). 마우스 클릭용."""
+        if not self._side_calibrating or self._side_baseline_picker is None:
+            return
+        self._side_baseline_picker.add_point(x, y)
+        self._side_message = None
+
+    def undo_side_baseline_point(self) -> None:
+        if self._side_calibrating and self._side_baseline_picker is not None:
+            self._side_baseline_picker.undo()
+            self._side_message = None
+
+    def reset_side_baseline_points(self) -> None:
+        if self._side_calibrating and self._side_baseline_picker is not None:
+            self._side_baseline_picker.reset()
+            self._side_message = None
+
+    def confirm_side_calibration(self) -> bool:
+        """2점이 유효하면 저장·적용하고 지정 모드를 종료한다.
+
+        반환값은 성공 여부. 실패(미완료·퇴화 2점) 시 ``side_message``에 이유가 남고
+        지정 모드는 유지된다(재시도 가능).
+        """
+        if not self._side_calibrating or self._side_baseline_picker is None:
+            return False
+        baseline, err = self._side_baseline_picker.try_build()
+        if baseline is None:
+            self._side_message = err or "Click 2 points first."
+            self._side_message_ok = False
+            return False
+
+        self._tracker.set_side_baseline(baseline, down_px=self._side_down_px, up_px=self._side_up_px)
+        if self._side_baseline_path is not None:
+            baseline.save(self._side_baseline_path)
+        self._side_calibrating = False
+        self._side_baseline_picker = None
+        self._side_message = f"Side baseline applied (down={self._side_down_px:.0f}px up={self._side_up_px:.0f}px)"
+        self._side_message_ok = True
+        return True
+
+    def cancel_side_calibration(self) -> None:
+        """측면 기준선 지정을 취소한다. 기존 기준선(있었다면)은 그대로 유지된다."""
+        self._side_calibrating = False
+        self._side_baseline_picker = None
+        self._side_message = None
+
+    def render_side_frame(self, side_bgr_frame: np.ndarray) -> np.ndarray:
+        """측면 카메라 창에 그릴 프레임을 만든다 — 지정 중이면 점 찍기 UI, 아니면 실행 중 상태.
+
+        실행 중 상태는 ``process_frame()``이 이미 계산해 둔 마지막 ``PenFrame``의
+        ``side_distance_px``/``side_pen_down``을 그대로 쓴다 — 여기서 다시 MediaPipe를
+        돌리지 않는다(같은 프레임을 두 번 처리하는 비용을 피함).
+        """
+        if self._side_calibrating:
+            return self._draw_side_calibration_overlay(side_bgr_frame)
+        return self._draw_side_status_overlay(side_bgr_frame)
+
+    def _draw_side_calibration_overlay(self, frame: np.ndarray) -> np.ndarray:
+        """측면 기준선 지정 모드의 점·연결선·안내 문구·메시지를 그려 반환한다."""
+        annotated = frame.copy()
+        picker = self._side_baseline_picker
+        if picker is None:
+            return annotated
+
+        for i, (x, y) in enumerate(picker.points):
+            pt = (int(round(x)), int(round(y)))
+            cv2.circle(annotated, pt, 8, _CAL_POINT_COLOR, -1)
+            cv2.putText(
+                annotated, str(i + 1), (pt[0] + 10, pt[1] - 10),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, _CAL_POINT_COLOR, 2, cv2.LINE_AA,
+            )
+        if len(picker.points) == 2:
+            p1 = tuple(int(round(v)) for v in picker.points[0])
+            p2 = tuple(int(round(v)) for v in picker.points[1])
+            cv2.line(annotated, p1, p2, _CAL_LINE_COLOR, 2, cv2.LINE_AA)
+
+        # ASCII로만 작성 (Hershey 폰트에 한글 글리프가 없어 한글은 ?????로 깨진다).
+        guide = (
+            f"[SIDE BASELINE] click: {picker.next_label} ({picker.count}/2) - along desk edge"
+            if not picker.is_complete
+            else "[SIDE BASELINE] 2 points done - Enter/S apply / Z undo / X reset / Esc cancel"
+        )
+        cv2.putText(annotated, guide, (15, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
+                    _CAL_TEXT_COLOR, 2, cv2.LINE_AA)
+        if self._side_message:
+            color = _CAL_OK_COLOR if self._side_message_ok else _CAL_ERR_COLOR
+            cv2.putText(annotated, self._side_message, (15, annotated.shape[0] - 20),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2, cv2.LINE_AA)
+        return annotated
+
+    def _draw_side_status_overlay(self, frame: np.ndarray) -> np.ndarray:
+        """측면 카메라 실행 중 상태(기준선·거리·접촉 여부)를 그려 반환한다."""
+        annotated = frame.copy()
+        baseline = self._tracker.side_baseline
+        if baseline is None:
+            cv2.putText(annotated, "SIDE: no baseline - press B to calibrate", (15, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, _CAL_ERR_COLOR, 2, cv2.LINE_AA)
+            return annotated
+
+        h, w = annotated.shape[:2]
+        px, py = baseline.point
+        dx, dy = baseline.direction
+        long_len = float(max(w, h)) * 2.0
+        p1 = (int(round(px - dx * long_len)), int(round(py - dy * long_len)))
+        p2 = (int(round(px + dx * long_len)), int(round(py + dy * long_len)))
+        cv2.line(annotated, p1, p2, _DEBUG_RULER_COLOR, 1, cv2.LINE_AA)
+
+        frame_data = self._last_frame
+        has_sample = frame_data is not None and frame_data.side_distance_px is not None
+        contact = bool(has_sample and frame_data.side_pen_down)
+        color = _DEBUG_CONTACT_COLOR if contact else _DEBUG_NORMAL_COLOR
+        detector = self._tracker.side_detector
+
+        lines = ["SIDE  (B to recalibrate)"]
+        if has_sample and detector is not None:
+            lines.append(
+                f"distance {frame_data.side_distance_px:6.1f}px  "
+                f"thresh {detector.down_px:.0f}/{detector.up_px:.0f}px"
+            )
+            lines.append(f"contact {'YES' if contact else 'no'}")
+        else:
+            lines.append("no side hand this frame")
+        for i, text in enumerate(lines):
+            line_color = _CAL_TEXT_COLOR if i == 0 else color
+            cv2.putText(annotated, text, (15, 30 + 24 * i), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.55, line_color, 2, cv2.LINE_AA)
+        return annotated
+
     def set_pen_down(self, down: bool) -> None:
         """수동 모드 펜 상태 설정 (자동 모드에서는 무시)."""
         self._pen_requested = down
@@ -649,8 +851,14 @@ class WhiteboardSession:
         """CSV 기록을 켜고/끄고, 켜졌으면 True를 반환한다."""
         return self._recorder.toggle()
 
-    def process_frame(self, bgr_frame: np.ndarray) -> np.ndarray:
-        """Run tracking + stroke recording and return the annotated frame."""
+    def process_frame(self, bgr_frame: np.ndarray, *, side_frame: np.ndarray | None = None) -> np.ndarray:
+        """Run tracking + stroke recording and return the annotated frame.
+
+        ``side_frame``(측면 카메라 프레임)을 함께 주면, 측면 기준선이 설정된 한 그 신호가
+        3D/pen_ratio보다 우선해 pen up/down을 판정한다(``core.pen_tracker.PenTracker.process``
+        참고). 캘리브레이션/터치 캘리브레이션 중에는 메인 카메라 흐름만 갱신하고 측면은
+        건드리지 않는다 — 측면 기준선 지정은 별도로 ``B`` 키로 진행하며 메인 흐름과 독립적이다.
+        """
         height, width = bgr_frame.shape[:2]
         if self._last_frame_size != (width, height):
             # 실제 카메라 해상도가 확정(또는 변경)되면 intrinsics를 그 해상도로 다시 맞춘다 —
@@ -678,7 +886,7 @@ class WhiteboardSession:
             self._advance_touch_calibration(touch_result.pen_ratio, touch_result.raw_height_mm)
             return self._draw_touch_calibration_overlay(bgr_frame, touch_result.fingertip)
 
-        result = self._tracker.process(bgr_frame)
+        result = self._tracker.process(bgr_frame, side_frame=side_frame)
         fingertip = result.fingertip
         self._last_frame = result
 
@@ -738,6 +946,8 @@ class WhiteboardSession:
             mode_label += "  * REC"
         mode_label += "  CAL:OK" if self._calibration is not None else "  CAL:NONE"
         mode_label += "  3D" if self._tracker.has_3d_contact else "  2D"
+        if self._tracker.has_side_contact:
+            mode_label += "  SIDE"
         cv2.putText(
             annotated,
             mode_label,
@@ -1023,6 +1233,7 @@ class WhiteboardSession:
 
 
 _WINDOW_NAME = "Virtual Whiteboard - M mode / K calib / T touch-calib / SPACE pen / R rec / C clear / S save / Q quit"
+_SIDE_WINDOW_NAME = "Side Camera - B baseline calib"
 
 
 def main() -> int:
@@ -1064,6 +1275,22 @@ def main() -> int:
         action="store_true",
         help="3D 디버그 오버레이(평면 수선 벡터·높이 눈금·수치)를 켠 채로 시작 (실행 중 D로 토글)",
     )
+    parser.add_argument(
+        "--side-camera",
+        type=int,
+        default=None,
+        metavar="N",
+        help="측면(폰) 카메라 장치 인덱스. 지정하면 별도 창을 띄우고 접촉 판정 최우선 신호로 쓴다 "
+             "(듀얼 카메라 계획, CLAUDE.md 참고). 미지정 시 메인 카메라만 사용(기존과 동일)",
+    )
+    parser.add_argument(
+        "--side-baseline",
+        type=str,
+        default=str(DEFAULT_BASELINE_PATH),
+        help="측면 기준선 저장/로드 경로 (기본 output/side_baseline.json)",
+    )
+    parser.add_argument("--side-down-px", type=float, default=DEFAULT_SIDE_DOWN_PX)
+    parser.add_argument("--side-up-px", type=float, default=DEFAULT_SIDE_UP_PX)
     args = parser.parse_args()
 
     camera = cv2.VideoCapture(args.camera)
@@ -1071,7 +1298,17 @@ def main() -> int:
         print(f"카메라 {args.camera}을(를) 열 수 없습니다.")
         return 1
 
+    side_camera = None
+    if args.side_camera is not None:
+        side_camera = cv2.VideoCapture(args.side_camera)
+        if not side_camera.isOpened():
+            print(f"측면 카메라 {args.side_camera}을(를) 열 수 없습니다.")
+            camera.release()
+            return 1
+
     print("M: 모드 전환 | K: 4점 캘리브레이션 | T: 접촉 캘리브레이션(3D 영점 포함) | D: 3D 디버그 표시 | R: CSV 기록 | C: 지우기 | S: 저장 | Q: 종료")
+    if side_camera is not None:
+        print("B: 측면 기준선 지정 (SIDE 창에서 클릭)")
     if not args.no_3d:
         print(f"[3D] 평면 실제 크기 {args.plane_size[0]:.0f}x{args.plane_size[1]:.0f}mm 가정 "
               f"— 다르면 --plane-size 로 지정하세요 (A4 가로면 그대로 두면 됩니다)")
@@ -1083,6 +1320,9 @@ def main() -> int:
             intrinsics_path=args.intrinsics,
             plane_size_mm=(args.plane_size[0], args.plane_size[1]),
             use_3d_contact=not args.no_3d,
+            side_baseline_path=args.side_baseline,
+            side_down_px=args.side_down_px,
+            side_up_px=args.side_up_px,
         ) as session:
             if args.debug_3d:
                 session.set_debug_3d(True)
@@ -1093,6 +1333,18 @@ def main() -> int:
                 if event == cv2.EVENT_LBUTTONDOWN
                 else None,
             )
+            if side_camera is not None:
+                cv2.namedWindow(_SIDE_WINDOW_NAME)
+                cv2.setMouseCallback(
+                    _SIDE_WINDOW_NAME,
+                    lambda event, x, y, flags, userdata: session.add_side_baseline_point(x, y)
+                    if event == cv2.EVENT_LBUTTONDOWN
+                    else None,
+                )
+                if session.has_side_contact:
+                    print(f"[측면 기준선] 저장된 기준선 사용 ({args.side_baseline})")
+                else:
+                    print("[측면 기준선] 저장된 기준선이 없습니다 — B를 눌러 지정하세요.")
 
             if session.needs_calibration:
                 # 세션 시작 시 유효한 캘리브레이션이 없으면(최초 실행) 1회 강제한다.
@@ -1109,7 +1361,15 @@ def main() -> int:
                 if args.mirror:
                     frame = cv2.flip(frame, 1)
 
-                annotated = session.process_frame(frame)
+                side_frame = None
+                if side_camera is not None:
+                    side_ok, side_frame = side_camera.read()
+                    if not side_ok:
+                        side_frame = None
+
+                annotated = session.process_frame(frame, side_frame=side_frame)
+                if side_camera is not None and side_frame is not None:
+                    cv2.imshow(_SIDE_WINDOW_NAME, session.render_side_frame(side_frame))
 
                 # 터치 캘리브레이션은 키 입력이 아니라 시간 경과로 자동 완료되므로,
                 # 결과 메시지가 바뀔 때만 콘솔에도 한 번 출력한다 (화면 표시는 항상 됨).
@@ -1152,6 +1412,27 @@ def main() -> int:
                     if key == 27:  # Esc: 취소
                         session.cancel_touch_calibration()
                         print("[터치 캘리브레이션] 취소 — 기존 임계값 유지")
+                elif session.is_side_calibrating:
+                    if key == ord("z"):
+                        session.undo_side_baseline_point()
+                    elif key == ord("x"):
+                        session.reset_side_baseline_points()
+                    elif key in (13, ord("s")):  # Enter 또는 S: 적용
+                        if session.confirm_side_calibration():
+                            print("[측면 기준선] 적용 완료")
+                        else:
+                            msg = session.side_message
+                            print(f"[측면 기준선] {msg[0] if msg else '2점을 모두 지정하세요.'}")
+                    elif key == 27:  # Esc: 취소
+                        session.cancel_side_calibration()
+                        print("[측면 기준선] 취소 — 기존 기준선 유지")
+                elif key == ord("b"):
+                    if side_camera is None:
+                        print("[측면 기준선] --side-camera가 지정되지 않았습니다.")
+                    else:
+                        session.start_side_calibration()
+                        print("[측면 기준선] 시작 — SIDE 창에서 책상 가장자리 위 2점 클릭 "
+                              "(Z 취소 / X 리셋 / Enter,S 적용 / Esc 취소)")
                 elif key == ord("k"):
                     session.start_calibration()
                     print("[캘리브레이션] 시작 — 클릭 또는 손끝+SPACE로 TL→TR→BR→BL 순서 지정 (Z 취소 / X 리셋 / Enter,S 적용 / Esc 취소)")
@@ -1184,6 +1465,8 @@ def main() -> int:
         pass
     finally:
         camera.release()
+        if side_camera is not None:
+            side_camera.release()
         cv2.destroyAllWindows()
     return 0
 
