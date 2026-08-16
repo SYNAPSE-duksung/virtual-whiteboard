@@ -20,7 +20,13 @@ pen-up/down)를 하나로 조합한다. controller/ui는 이 모듈만 사용하
 3. **pen_ratio 판정(최종 폴백)**: 위 조건이 안 되거나 자세 추정이 실패한 프레임에서는
    기존 손가락 굽힘 비율 휴리스틱을 쓴다.
 
-어느 쪽이 쓰였는지는 ``PenFrame.contact_source``(``"side"``|``"3d"``|``"ratio"``)로 확인할 수 있다.
+이와 별개로 **ML 판정**(``core.ml_pen_state.MLPenStateDetector``, D파트가 학습한
+``scripts/train_pen_state.py`` 결과물)이 있다. 이건 위 세 가지처럼 데이터 가용성에 따른
+자동 폴백이 아니라, 사용자가 ``set_use_ml_pen_state(True)``로 켜는 **수동 스위치**다.
+켜져 있으면 pen_ratio 자리(위 3번)에서만 pen_ratio 대신 경쟁한다 — side/3D는 독립적인
+물리 측정이라 여전히 그 위 우선순위를 유지한다(휴리스틱 vs ML 비교가 목적이므로).
+
+어느 쪽이 쓰였는지는 ``PenFrame.contact_source``(``"side"``|``"3d"``|``"ml"``|``"ratio"``)로 확인할 수 있다.
 
 **평면 범위 게이팅**은 두 경우 모두에 적용된다 — 손끝이 캘리브레이션한 사각형 밖이면
 판정과 무관하게 ``pen_down``을 False로 강제한다.
@@ -49,6 +55,7 @@ from core.contact3d import (
 )
 from core.filters import FingertipSmoother
 from core.geometry import PerspectiveCalibration
+from core.ml_pen_state import MLPenStateDetector
 from core.pen_state import INDEX_TIP, PenStateDetector, compute_pen_ratio, is_open_hand
 from core.side_contact import SideBaseline, SideContactDetector
 from core.side_contact import measure as measure_side
@@ -80,6 +87,10 @@ class PenFrame:
     side_pen_down: bool | None = None
     #: 측면 카메라에서 손끝-기준선까지의 원시 거리(px). 측면 신호를 못 얻은 프레임은 None.
     side_distance_px: float | None = None
+    #: ML 모델 판정(히스테리시스 없는 프레임 단위 예측). ML을 안 쓰거나 모델이 없으면 None.
+    ml_pen_down: bool | None = None
+    #: ML 모델의 pen-down 확률. ``predict_proba``를 지원하지 않는 모델(예: SVM)이면 None.
+    ml_confidence: float | None = None
 
     @classmethod
     def empty(cls) -> "PenFrame":
@@ -111,6 +122,8 @@ class PenTracker:
         side_baseline: SideBaseline | None = None,
         side_down_px: float | None = None,
         side_up_px: float | None = None,
+        ml_detector: MLPenStateDetector | None = None,
+        use_ml_pen_state: bool = False,
     ) -> None:
         self._tracker = HandTracker(
             max_num_hands=max_num_hands,
@@ -142,6 +155,11 @@ class PenTracker:
         self._side_baseline: SideBaseline | None = None
         self._side_detector: SideContactDetector | None = None
         self.set_side_baseline(side_baseline, down_px=side_down_px, up_px=side_up_px)
+
+        # ML 판정(D파트 학습 모델). side/3D와 달리 자동 폴백이 아니라 수동 스위치라서
+        # 위 두 신호처럼 lazy 생성이 필요 없다 — detector 유무·on/off 두 상태만 있으면 된다.
+        self._ml_detector = ml_detector
+        self._use_ml_pen_state = bool(use_ml_pen_state)
 
     # ------------------------------------------------------------------
     # 캘리브레이션 / 3D 접촉 추정기
@@ -175,6 +193,30 @@ class PenTracker:
 
     def set_debug_3d(self, enabled: bool) -> None:
         self._debug_3d = bool(enabled)
+
+    # ------------------------------------------------------------------
+    # ML 판정 (D파트 학습 모델, 휴리스틱과 수동 토글)
+    # ------------------------------------------------------------------
+    @property
+    def has_ml_pen_state(self) -> bool:
+        """ML 판정을 쓸 수 있는 상태인지(모델이 로드됐는지)."""
+        return self._ml_detector is not None
+
+    @property
+    def use_ml_pen_state(self) -> bool:
+        """현재 pen_ratio 대신 ML 판정을 쓰도록 켜져 있는지."""
+        return self._use_ml_pen_state
+
+    def set_use_ml_pen_state(self, enabled: bool) -> None:
+        self._use_ml_pen_state = bool(enabled)
+
+    def toggle_ml_pen_state(self) -> bool:
+        self._use_ml_pen_state = not self._use_ml_pen_state
+        return self._use_ml_pen_state
+
+    def set_ml_detector(self, detector: MLPenStateDetector | None) -> None:
+        """ML 모델을 교체(또는 ``None``으로 해제)한다."""
+        self._ml_detector = detector
 
     def _set_calibration_internal(self, calibration: PerspectiveCalibration | None) -> None:
         """캘리브레이션을 반영하고, 조건이 되면 3D 접촉 추정기를 (재)구성한다.
@@ -306,6 +348,8 @@ class PenTracker:
             self._contact_detector.reset()
             if self._side_detector is not None:
                 self._side_detector.reset()
+            if self._ml_detector is not None:
+                self._ml_detector.reset()
             return PenFrame.empty()
 
         hand = hands[0]
@@ -347,12 +391,16 @@ class PenTracker:
                 side_distance = measure_side(side_hands[0], self._side_baseline)
 
         side_pen_down_signal: bool | None = None
+        ml_pen_down_signal: bool | None = None
+        ml_confidence: float | None = None
         if erase_gesture:
             # 지우기 제스처 중에는 펜을 내리지 않는다.
             self._pen_state.reset()
             self._contact_detector.reset()
             if self._side_detector is not None:
                 self._side_detector.reset()
+            if self._ml_detector is not None:
+                self._ml_detector.reset()
             instant_pen_down = False
             contact_source = "side" if side_distance is not None else ("3d" if sample is not None else "ratio")
         elif side_distance is not None:
@@ -370,6 +418,15 @@ class PenTracker:
             # (다음 프레임에 3D가 실패해도 어긋난 상태에서 시작하지 않도록).
             self._pen_state.update(pen_ratio)
             contact_source = "3d"
+        elif self._use_ml_pen_state and self._ml_detector is not None:
+            # ML은 side/3D처럼 자동 폴백이 아니라 수동 토글 — pen_ratio 자리에서만 경쟁한다.
+            ml_pen_down_signal, ml_confidence = self._ml_detector.update(landmarks)
+            instant_pen_down = ml_pen_down_signal
+            # 토글을 다시 끄거나 ML이 이번 프레임만 실패해도 어긋난 상태에서 시작하지
+            # 않도록 pen_ratio 히스테리시스도 계속 최신화한다.
+            self._pen_state.update(pen_ratio)
+            self._contact_detector.reset()
+            contact_source = "ml"
         else:
             instant_pen_down = self._pen_state.update(pen_ratio)
             self._contact_detector.reset()
@@ -400,6 +457,8 @@ class PenTracker:
             contact_debug=contact_debug,
             side_pen_down=side_pen_down_signal,
             side_distance_px=side_distance,
+            ml_pen_down=ml_pen_down_signal,
+            ml_confidence=ml_confidence,
         )
 
     @staticmethod
@@ -416,6 +475,8 @@ class PenTracker:
         self._contact_detector.reset()
         if self._side_detector is not None:
             self._side_detector.reset()
+        if self._ml_detector is not None:
+            self._ml_detector.reset()
 
     def close(self) -> None:
         self._tracker.close()
