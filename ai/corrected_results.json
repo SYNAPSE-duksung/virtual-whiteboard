@@ -1,0 +1,26 @@
+{
+  "Img\\alleviate.png": {
+    "ocr_text": "allevicte",
+    "corrected_text": "alleviate"
+  },
+  "Img\\helloK_hello.png": {
+    "ocr_text": "안녕 hello",
+    "corrected_text": "안녕 hello"
+  },
+  "Img\\perfectK.png": {
+    "ocr_text": "정확",
+    "corrected_text": "정확"
+  },
+  "Img\\rightK.png": {
+    "ocr_text": "적겪",
+    "corrected_text": "적격"
+  },
+  "Img\\warm_naengmyeonK.png": {
+    "ocr_text": "미지곤한 냉면",
+    "corrected_text": "미지근한 냉면"
+  },
+  "Img\\zebra_is.png": {
+    "ocr_text": "Zcbla Is",
+    "corrected_text": "Zebra Is"
+  }
+}
