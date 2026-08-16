@@ -3,6 +3,7 @@ venv/
 captures/
 data/dataset/recordings/
 output/
+ai/previous/
 
 __pycache__/
 *.py[cod]
