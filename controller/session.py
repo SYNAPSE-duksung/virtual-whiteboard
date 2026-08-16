@@ -22,6 +22,8 @@ from controller.state_machine import PenStateMachine
 from core.camera import DEFAULT_INTRINSICS_PATH, CameraIntrinsics
 from core.contact3d import DEFAULT_PLANE_SIZE_MM, MAX_REPROJECTION_ERROR_PX
 from core.geometry import DEFAULT_CALIBRATION_PATH, CalibrationPicker, PerspectiveCalibration
+from core.ml_pen_state import DEFAULT_MODEL_PATH as DEFAULT_ML_MODEL_PATH
+from core.ml_pen_state import MLPenStateDetector
 from core.pen_tracker import PenTracker
 from core.side_contact import (
     DEFAULT_BASELINE_PATH,
@@ -88,6 +90,10 @@ class SessionDebug:
     side_pen_down: bool | None = None  # 측면 신호 판정 결과(이번 프레임에 측면 손 검출됐을 때만)
     side_distance_px: float | None = None  # 측면 손끝-기준선 원시 거리(px)
     is_side_calibrating: bool = False  # 측면 기준선 지정 중인지
+    has_ml_pen_state: bool = False  # D파트 ML 모델 로드 여부
+    use_ml_pen_state: bool = False  # 지금 pen_ratio 대신 ML 판정을 쓰도록 켜져 있는지
+    ml_pen_down: bool | None = None  # ML 판정 결과(ML을 안 쓰거나 모델이 없으면 None)
+    ml_confidence: float | None = None  # ML pen-down 확률(모델이 predict_proba 미지원이면 None)
 
 
 class WhiteboardSession:
@@ -122,6 +128,8 @@ class WhiteboardSession:
         side_baseline_path: str | Path | None = DEFAULT_BASELINE_PATH,
         side_down_px: float = DEFAULT_SIDE_DOWN_PX,
         side_up_px: float = DEFAULT_SIDE_UP_PX,
+        ml_model_path: str | Path | None = DEFAULT_ML_MODEL_PATH,
+        use_ml_pen_state: bool = False,
     ) -> None:
         # 세션 시작 시 저장된 캘리브레이션을 1회 자동 로드한다. 없거나(최초 실행)
         # 손상됐으면 조용히 게이팅 없는 상태로 시작하고, 데모 루프가 `needs_calibration`을
@@ -158,6 +166,18 @@ class WhiteboardSession:
             except (FileNotFoundError, OSError, ValueError, KeyError, TypeError):
                 side_baseline = None
 
+        # D파트가 학습한 ML pen up/down 모델도 세션 시작 시 1회 로드해두고(재로드 없이
+        # 즉시 토글 가능), 실패하면 조용히 휴리스틱만 쓴다. joblib 언피클링은 실패 유형이
+        # 열려 있어(scikit-learn 버전 불일치, 라이브러리 미설치 등) 다른 load-or-None
+        # 사이트(JSON)보다 넓게 예외를 잡는다.
+        self._ml_model_path = ml_model_path
+        ml_detector: MLPenStateDetector | None = None
+        if ml_model_path is not None:
+            try:
+                ml_detector = MLPenStateDetector.load(ml_model_path)
+            except Exception as exc:
+                print(f"[ML pen] 모델을 불러오지 못해 휴리스틱만 사용합니다 ({ml_model_path}): {exc}")
+
         self._tracker = PenTracker(
             min_cutoff=min_cutoff,
             beta=beta,
@@ -169,6 +189,8 @@ class WhiteboardSession:
             side_baseline=side_baseline,
             side_down_px=side_down_px,
             side_up_px=side_up_px,
+            ml_detector=ml_detector,
+            use_ml_pen_state=use_ml_pen_state,
         )
         self._pen_down_thresh = pen_down_thresh
         self._pen_up_thresh = pen_up_thresh
@@ -312,6 +334,10 @@ class WhiteboardSession:
             side_pen_down=frame.side_pen_down if frame is not None else None,
             side_distance_px=frame.side_distance_px if frame is not None else None,
             is_side_calibrating=self._side_calibrating,
+            has_ml_pen_state=self._tracker.has_ml_pen_state,
+            use_ml_pen_state=self._tracker.use_ml_pen_state,
+            ml_pen_down=frame.ml_pen_down if frame is not None else None,
+            ml_confidence=frame.ml_confidence if frame is not None else None,
         )
 
     # ------------------------------------------------------------------
@@ -336,6 +362,27 @@ class WhiteboardSession:
         """디버그 오버레이를 토글하고 결과 상태를 반환한다."""
         self.set_debug_3d(not self._debug_3d)
         return self._debug_3d
+
+    # ------------------------------------------------------------------
+    # ML 판정 (D파트 학습 모델, 휴리스틱과 수동 토글)
+    # ------------------------------------------------------------------
+    @property
+    def has_ml_pen_state(self) -> bool:
+        """ML 판정을 쓸 수 있는 상태인지(모델이 로드됐는지)."""
+        return self._tracker.has_ml_pen_state
+
+    @property
+    def use_ml_pen_state(self) -> bool:
+        """지금 pen_ratio 대신 ML 판정을 쓰도록 켜져 있는지."""
+        return self._tracker.use_ml_pen_state
+
+    def set_use_ml_pen_state(self, enabled: bool) -> None:
+        """ML 판정 사용 여부를 켜고 끈다 (모델이 없으면 켜도 조용히 무시됨)."""
+        self._tracker.set_use_ml_pen_state(enabled)
+
+    def toggle_ml_pen_state(self) -> bool:
+        """ML 판정 토글하고 결과 상태를 반환한다."""
+        return self._tracker.toggle_ml_pen_state()
 
     @property
     def intrinsics(self) -> CameraIntrinsics | None:
