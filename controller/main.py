@@ -19,8 +19,15 @@ from controller.session import WhiteboardSession
 from core.camera import DEFAULT_INTRINSICS_PATH
 from core.contact3d import DEFAULT_PLANE_SIZE_MM
 from core.geometry import DEFAULT_CALIBRATION_PATH
+from core.ml_pen_state import DEFAULT_MODEL_PATH as DEFAULT_ML_MODEL_PATH
+from core.side_contact import (
+    DEFAULT_BASELINE_PATH,
+    DEFAULT_DOWN_PX as DEFAULT_SIDE_DOWN_PX,
+    DEFAULT_UP_PX as DEFAULT_SIDE_UP_PX,
+)
 
 _WINDOW_NAME = "Virtual Whiteboard - M mode / K calib / T touch-calib / SPACE pen / O ocr / C clear / S save / Q quit"
+_SIDE_WINDOW_NAME = "Side Camera - B baseline calib"
 
 
 def main() -> int:
@@ -67,6 +74,40 @@ def main() -> int:
         action="store_true",
         help="3D 디버그 오버레이(평면 수선 벡터·높이 눈금·수치)를 켠 채로 시작 (실행 중 D로 토글)",
     )
+    parser.add_argument(
+        "--side-camera",
+        type=int,
+        default=None,
+        metavar="N",
+        help="측면(폰) 카메라 장치 인덱스. 지정하면 별도 창을 띄우고 접촉 판정 최우선 신호로 쓴다 "
+             "(듀얼 카메라 계획, docs/dual-camera-plan.md 참고). 미지정 시 메인 카메라만 사용(기존과 동일)",
+    )
+    parser.add_argument(
+        "--side-baseline",
+        type=str,
+        default=str(DEFAULT_BASELINE_PATH),
+        help="측면 기준선 저장/로드 경로 (기본 output/side_baseline.json)",
+    )
+    parser.add_argument("--side-down-px", type=float, default=DEFAULT_SIDE_DOWN_PX)
+    parser.add_argument("--side-up-px", type=float, default=DEFAULT_SIDE_UP_PX)
+    parser.add_argument(
+        "--pen-model",
+        type=str,
+        default=str(DEFAULT_ML_MODEL_PATH),
+        metavar="PATH",
+        help="D파트가 학습한 pen up/down ML 모델(joblib) 경로. 없거나 로드 실패해도 조용히 "
+             "휴리스틱만 사용 (기본 ml_results/logistic_regression.joblib)",
+    )
+    parser.add_argument(
+        "--no-pen-model",
+        action="store_true",
+        help="ML 모델을 아예 로드하지 않는다 (joblib/scikit-learn 미설치 환경 등)",
+    )
+    parser.add_argument(
+        "--use-ml-pen-state",
+        action="store_true",
+        help="시작할 때부터 pen_ratio 휴리스틱 대신 ML 판정 사용 (실행 중 P로 전환)",
+    )
     args = parser.parse_args()
 
     camera = cv2.VideoCapture(args.camera)
@@ -74,7 +115,18 @@ def main() -> int:
         print(f"카메라 {args.camera}을(를) 열 수 없습니다.")
         return 1
 
-    print("M: 모드 전환 | K: 4점 캘리브레이션 | T: 접촉 캘리브레이션(3D 영점 포함) | D: 3D 디버그 표시 | O: OCR 트리거 | C: 지우기 | S: 저장 | Q: 종료")
+    side_camera = None
+    if args.side_camera is not None:
+        side_camera = cv2.VideoCapture(args.side_camera)
+        if not side_camera.isOpened():
+            print(f"측면 카메라 {args.side_camera}을(를) 열 수 없습니다.")
+            camera.release()
+            return 1
+
+    print("M: 모드 전환 | K: 4점 캘리브레이션 | T: 접촉 캘리브레이션(3D 영점 포함) | D: 3D 디버그 표시 | "
+          "P: ML/휴리스틱 전환 | O: OCR 트리거 | C: 지우기 | S: 저장 | Q: 종료")
+    if side_camera is not None:
+        print("B: 측면 기준선 지정 (SIDE 창에서 클릭)")
     if not args.no_3d:
         print(f"[3D] 평면 실제 크기 {args.plane_size[0]:.0f}x{args.plane_size[1]:.0f}mm 가정 "
               f"— 다르면 --plane-size 로 지정하세요 (A4 가로면 그대로 두면 됩니다)")
@@ -87,6 +139,11 @@ def main() -> int:
             intrinsics_path=args.intrinsics,
             plane_size_mm=(args.plane_size[0], args.plane_size[1]),
             use_3d_contact=not args.no_3d,
+            side_baseline_path=args.side_baseline,
+            side_down_px=args.side_down_px,
+            side_up_px=args.side_up_px,
+            ml_model_path=None if args.no_pen_model else args.pen_model,
+            use_ml_pen_state=args.use_ml_pen_state,
         ) as session:
             if args.debug_3d:
                 session.set_debug_3d(True)
@@ -97,6 +154,18 @@ def main() -> int:
                 if event == cv2.EVENT_LBUTTONDOWN
                 else None,
             )
+            if side_camera is not None:
+                cv2.namedWindow(_SIDE_WINDOW_NAME)
+                cv2.setMouseCallback(
+                    _SIDE_WINDOW_NAME,
+                    lambda event, x, y, flags, userdata: session.add_side_baseline_point(x, y)
+                    if event == cv2.EVENT_LBUTTONDOWN
+                    else None,
+                )
+                if session.has_side_contact:
+                    print(f"[측면 기준선] 저장된 기준선 사용 ({args.side_baseline})")
+                else:
+                    print("[측면 기준선] 저장된 기준선이 없습니다 — B를 눌러 지정하세요.")
 
             if session.needs_calibration:
                 # 세션 시작 시 유효한 캘리브레이션이 없으면(최초 실행) 1회 강제한다.
@@ -115,7 +184,15 @@ def main() -> int:
                 if args.flip_vertical:
                     frame = cv2.flip(frame, 0)
 
-                annotated = session.process_frame(frame)
+                side_frame = None
+                if side_camera is not None:
+                    side_ok, side_frame = side_camera.read()
+                    if not side_ok:
+                        side_frame = None
+
+                annotated = session.process_frame(frame, side_frame=side_frame)
+                if side_camera is not None and side_frame is not None:
+                    cv2.imshow(_SIDE_WINDOW_NAME, session.render_side_frame(side_frame))
 
                 # 터치 캘리브레이션은 키 입력이 아니라 시간 경과로 자동 완료되므로,
                 # 결과 메시지가 바뀔 때만 콘솔에도 한 번 출력한다 (화면 표시는 항상 됨).
@@ -170,6 +247,27 @@ def main() -> int:
                     if key == 27:  # Esc: 취소
                         session.cancel_touch_calibration()
                         print("[터치 캘리브레이션] 취소 — 기존 임계값 유지")
+                elif session.is_side_calibrating:
+                    if key == ord("z"):
+                        session.undo_side_baseline_point()
+                    elif key == ord("x"):
+                        session.reset_side_baseline_points()
+                    elif key in (13, ord("s")):  # Enter 또는 S: 적용
+                        if session.confirm_side_calibration():
+                            print("[측면 기준선] 적용 완료")
+                        else:
+                            msg = session.side_message
+                            print(f"[측면 기준선] {msg[0] if msg else '2점을 모두 지정하세요.'}")
+                    elif key == 27:  # Esc: 취소
+                        session.cancel_side_calibration()
+                        print("[측면 기준선] 취소 — 기존 기준선 유지")
+                elif key == ord("b"):
+                    if side_camera is None:
+                        print("[측면 기준선] --side-camera가 지정되지 않았습니다.")
+                    else:
+                        session.start_side_calibration()
+                        print("[측면 기준선] 시작 — SIDE 창에서 책상 가장자리 위 2점 클릭 "
+                              "(Z 취소 / X 리셋 / Enter,S 적용 / Esc 취소)")
                 elif key == ord("k"):
                     session.start_calibration()
                     print("[캘리브레이션] 시작 — 클릭 또는 손끝+SPACE로 TL→TR→BR→BL 순서 지정 (Z 취소 / X 리셋 / Enter,S 적용 / Esc 취소)")
@@ -183,6 +281,10 @@ def main() -> int:
                 elif key == ord("m"):
                     auto = session.toggle_mode()
                     print(f"모드 전환: {'자동(손끝 판정)' if auto else '수동(SPACE 펜)'}")
+                elif key == ord("p"):
+                    on = session.toggle_ml_pen_state()
+                    print(f"[ML 판정] {'사용' if on else '미사용(휴리스틱)'}"
+                          + ("" if session.has_ml_pen_state else " (※ ML 모델이 로드되지 않았습니다)"))
                 elif key == ord("o"):
                     if not session.trigger_ocr():
                         print("[OCR/LLM] 이전 작업 처리 중 — 잠시 후 다시 시도하세요.")
@@ -200,6 +302,8 @@ def main() -> int:
         pass
     finally:
         camera.release()
+        if side_camera is not None:
+            side_camera.release()
         cv2.destroyAllWindows()
     return 0
 

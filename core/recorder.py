@@ -25,6 +25,10 @@ CSV_COLUMNS = [
     "filtered_y",
     "pen_ratio",
     "pen_down",
+    # 4점 캘리브레이션(core.geometry.PerspectiveCalibration)이 활성일 때만 채워지는
+    # 정류(rectified) 좌표. 캘리브레이션이 없으면 빈 값으로 남는다(기존 컬럼과 동일 규약).
+    "rectified_x",
+    "rectified_y",
 ]
 
 _FLUSH_EVERY = 30  # N프레임마다 디스크 flush
@@ -42,12 +46,16 @@ class CoordSample:
     filtered_y: float | None = None
     pen_ratio: float | None = None
     pen_down: bool = False
+    rectified_x: float | None = None
+    rectified_y: float | None = None
 
     @classmethod
     def from_pen_frame(cls, frame: "object") -> "CoordSample":
         """``core.PenFrame``에서 CSV 샘플을 만든다."""
         raw = frame.raw_fingertip
         filt = frame.fingertip
+        # PenFrame.rectified는 캘리브레이션이 없으면 None — 그대로 두면 빈 CSV 값이 된다.
+        rectified = getattr(frame, "rectified", None)
         return cls(
             hand_detected=frame.hand_detected,
             raw_x=raw[0] if raw is not None else None,
@@ -57,6 +65,8 @@ class CoordSample:
             filtered_y=filt[1] if filt is not None else None,
             pen_ratio=frame.pen_ratio,
             pen_down=frame.pen_down,
+            rectified_x=rectified[0] if rectified is not None else None,
+            rectified_y=rectified[1] if rectified is not None else None,
         )
 
 
@@ -114,6 +124,8 @@ class CoordRecorder:
             _fmt(sample.filtered_y, ".2f"),
             _fmt(sample.pen_ratio, ".4f"),
             int(sample.pen_down),
+            _fmt(sample.rectified_x, ".2f"),
+            _fmt(sample.rectified_y, ".2f"),
         ])
         if self._frame_id % _FLUSH_EVERY == 0:
             self._file.flush()

@@ -13,6 +13,7 @@ import numpy as np
 from core.contact3d import MAX_REPROJECTION_ERROR_PX
 from core.geometry import CalibrationPicker
 from core.pen_tracker import PenTracker
+from core.side_contact import SideBaseline, SideBaselinePicker
 
 __all__ = [
     "PLANE_OUTLINE_COLOR",
@@ -20,6 +21,8 @@ __all__ = [
     "draw_height_gauge",
     "draw_calibration_overlay",
     "draw_touch_calibration_overlay",
+    "draw_side_calibration_overlay",
+    "draw_side_status_overlay",
 ]
 
 CAL_POINT_COLOR = (0, 215, 255)
@@ -346,4 +349,87 @@ def draw_touch_calibration_overlay(
                 annotated, line, (15, base_y + 22 * i),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2, cv2.LINE_AA,
             )
+    return annotated
+
+
+def draw_side_calibration_overlay(
+    frame: np.ndarray,
+    *,
+    picker: SideBaselinePicker | None,
+    message: tuple[str, bool] | None,
+) -> np.ndarray:
+    """측면 기준선 지정 모드의 점·연결선·안내 문구·메시지를 그려 반환한다 (SIDE 창 전용)."""
+    annotated = frame.copy()
+    if picker is None:
+        return annotated
+
+    for i, (x, y) in enumerate(picker.points):
+        pt = (int(round(x)), int(round(y)))
+        cv2.circle(annotated, pt, 8, CAL_POINT_COLOR, -1)
+        cv2.putText(
+            annotated, str(i + 1), (pt[0] + 10, pt[1] - 10),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.6, CAL_POINT_COLOR, 2, cv2.LINE_AA,
+        )
+    if len(picker.points) == 2:
+        p1 = tuple(int(round(v)) for v in picker.points[0])
+        p2 = tuple(int(round(v)) for v in picker.points[1])
+        cv2.line(annotated, p1, p2, CAL_LINE_COLOR, 2, cv2.LINE_AA)
+
+    # ASCII로만 작성 (Hershey 폰트에 한글 글리프가 없어 한글은 ?????로 깨진다).
+    guide = (
+        f"[SIDE BASELINE] click: {picker.next_label} ({picker.count}/2) - along desk edge"
+        if not picker.is_complete
+        else "[SIDE BASELINE] 2 points done - Enter/S apply / Z undo / X reset / Esc cancel"
+    )
+    _put_text_wrapped(annotated, guide, (15, 30), font_scale=0.6,
+                       color=CAL_TEXT_COLOR, thickness=2, line_height=28)
+    if message:
+        text, ok = message
+        color = CAL_OK_COLOR if ok else CAL_ERR_COLOR
+        lines = _wrap_text(text, font_scale=0.55, thickness=2, max_width=annotated.shape[1] - 30)
+        base_y = annotated.shape[0] - 20 - 24 * (len(lines) - 1)
+        for i, line in enumerate(lines):
+            cv2.putText(annotated, line, (15, base_y + 24 * i),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2, cv2.LINE_AA)
+    return annotated
+
+
+def draw_side_status_overlay(
+    frame: np.ndarray,
+    *,
+    baseline: SideBaseline | None,
+    side_distance_px: float | None,
+    side_pen_down: bool | None,
+    down_px: float,
+    up_px: float,
+) -> np.ndarray:
+    """측면 카메라 실행 중 상태(기준선·거리·접촉 여부)를 그려 반환한다 (SIDE 창 전용)."""
+    annotated = frame.copy()
+    if baseline is None:
+        cv2.putText(annotated, "SIDE: no baseline - press B to calibrate", (15, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, CAL_ERR_COLOR, 2, cv2.LINE_AA)
+        return annotated
+
+    h, w = annotated.shape[:2]
+    px, py = baseline.point
+    dx, dy = baseline.direction
+    long_len = float(max(w, h)) * 2.0
+    p1 = (int(round(px - dx * long_len)), int(round(py - dy * long_len)))
+    p2 = (int(round(px + dx * long_len)), int(round(py + dy * long_len)))
+    cv2.line(annotated, p1, p2, DEBUG_RULER_COLOR, 1, cv2.LINE_AA)
+
+    has_sample = side_distance_px is not None
+    contact = bool(has_sample and side_pen_down)
+    color = DEBUG_CONTACT_COLOR if contact else DEBUG_NORMAL_COLOR
+
+    lines = ["SIDE  (B to recalibrate)"]
+    if has_sample:
+        lines.append(f"distance {side_distance_px:6.1f}px  thresh {down_px:.0f}/{up_px:.0f}px")
+        lines.append(f"contact {'YES' if contact else 'no'}")
+    else:
+        lines.append("no side hand this frame")
+    for i, text in enumerate(lines):
+        line_color = CAL_TEXT_COLOR if i == 0 else color
+        cv2.putText(annotated, text, (15, 30 + 24 * i), cv2.FONT_HERSHEY_SIMPLEX,
+                    0.55, line_color, 2, cv2.LINE_AA)
     return annotated

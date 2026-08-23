@@ -22,7 +22,16 @@ from controller.state_machine import PenStateMachine
 from core.camera import DEFAULT_INTRINSICS_PATH, CameraIntrinsics
 from core.contact3d import DEFAULT_PLANE_SIZE_MM, MAX_REPROJECTION_ERROR_PX
 from core.geometry import DEFAULT_CALIBRATION_PATH, CalibrationPicker, PerspectiveCalibration
+from core.ml_pen_state import DEFAULT_MODEL_PATH as DEFAULT_ML_MODEL_PATH
+from core.ml_pen_state import MLPenStateDetector
 from core.pen_tracker import PenTracker
+from core.side_contact import (
+    DEFAULT_BASELINE_PATH,
+    DEFAULT_DOWN_PX as DEFAULT_SIDE_DOWN_PX,
+    DEFAULT_UP_PX as DEFAULT_SIDE_UP_PX,
+    SideBaseline,
+    SideBaselinePicker,
+)
 from core.touch_calibration import (
     DEFAULT_SAMPLE_SECONDS,
     TouchCalibrationError,
@@ -77,6 +86,14 @@ class SessionDebug:
     contact_inside_plane: bool | None = None  # plane_xy_mm이 평면 범위 안인지 (3D 기준)
     contact_reprojection_error_px: float | None = None  # 이번 프레임 손 자세 재투영 오차(성공 시)
     contact_last_error_px: float | None = None  # 마지막 시도의 재투영 오차 (실패한 프레임 포함)
+    has_side_contact: bool = False  # 측면 카메라 접촉 판정 사용 가능 여부(기준선 설정됨)
+    side_pen_down: bool | None = None  # 측면 신호 판정 결과(이번 프레임에 측면 손 검출됐을 때만)
+    side_distance_px: float | None = None  # 측면 손끝-기준선 원시 거리(px)
+    is_side_calibrating: bool = False  # 측면 기준선 지정 중인지
+    has_ml_pen_state: bool = False  # D파트 ML 모델 로드 여부
+    use_ml_pen_state: bool = False  # 지금 pen_ratio 대신 ML 판정을 쓰도록 켜져 있는지
+    ml_pen_down: bool | None = None  # ML 판정 결과(ML을 안 쓰거나 모델이 없으면 None)
+    ml_confidence: float | None = None  # ML pen-down 확률(모델이 predict_proba 미지원이면 None)
 
 
 class WhiteboardSession:
@@ -108,6 +125,11 @@ class WhiteboardSession:
         frame_size: tuple[int, int] = (1280, 720),
         use_3d_contact: bool = True,
         render_3d_debug_inline: bool = True,
+        side_baseline_path: str | Path | None = DEFAULT_BASELINE_PATH,
+        side_down_px: float = DEFAULT_SIDE_DOWN_PX,
+        side_up_px: float = DEFAULT_SIDE_UP_PX,
+        ml_model_path: str | Path | None = DEFAULT_ML_MODEL_PATH,
+        use_ml_pen_state: bool = False,
     ) -> None:
         # 세션 시작 시 저장된 캘리브레이션을 1회 자동 로드한다. 없거나(최초 실행)
         # 손상됐으면 조용히 게이팅 없는 상태로 시작하고, 데모 루프가 `needs_calibration`을
@@ -132,6 +154,30 @@ class WhiteboardSession:
             else None
         )
 
+        # 측면(폰) 카메라 기준선도 캘리브레이션과 같은 방식으로 세션 시작 시 1회 자동 로드한다
+        # (저장돼 있으면 바로 활성화, 없으면 조용히 비활성 — B 키로 언제든 새로 지정 가능).
+        self._side_baseline_path = side_baseline_path
+        self._side_down_px = side_down_px
+        self._side_up_px = side_up_px
+        side_baseline: SideBaseline | None = None
+        if side_baseline_path is not None:
+            try:
+                side_baseline = SideBaseline.load(side_baseline_path)
+            except (FileNotFoundError, OSError, ValueError, KeyError, TypeError):
+                side_baseline = None
+
+        # D파트가 학습한 ML pen up/down 모델도 세션 시작 시 1회 로드해두고(재로드 없이
+        # 즉시 토글 가능), 실패하면 조용히 휴리스틱만 쓴다. joblib 언피클링은 실패 유형이
+        # 열려 있어(scikit-learn 버전 불일치, 라이브러리 미설치 등) 다른 load-or-None
+        # 사이트(JSON)보다 넓게 예외를 잡는다.
+        self._ml_model_path = ml_model_path
+        ml_detector: MLPenStateDetector | None = None
+        if ml_model_path is not None:
+            try:
+                ml_detector = MLPenStateDetector.load(ml_model_path)
+            except Exception as exc:
+                print(f"[ML pen] 모델을 불러오지 못해 휴리스틱만 사용합니다 ({ml_model_path}): {exc}")
+
         self._tracker = PenTracker(
             min_cutoff=min_cutoff,
             beta=beta,
@@ -140,6 +186,11 @@ class WhiteboardSession:
             calibration=self._calibration,
             intrinsics=self._intrinsics,
             use_3d_contact=use_3d_contact,
+            side_baseline=side_baseline,
+            side_down_px=side_down_px,
+            side_up_px=side_up_px,
+            ml_detector=ml_detector,
+            use_ml_pen_state=use_ml_pen_state,
         )
         self._pen_down_thresh = pen_down_thresh
         self._pen_up_thresh = pen_up_thresh
@@ -195,6 +246,14 @@ class WhiteboardSession:
         # (그래픽 오버레이)은 계속 프레임에 그린다 — 이건 "글자"가 아니라 시각적 표시라
         # Qt 라벨로 대체하기 애매하고, 손끝 위치와 겹쳐 봐야 의미가 있다.
         self._render_3d_debug_inline = render_3d_debug_inline
+
+        # 측면(폰) 카메라 기준선(책상면) 지정 진행 상태. 4점/터치 캘리브레이션과 마찬가지로
+        # 서로 동시에 진행할 수 없다(각 start_*가 서로를 확인해 거부). 메인 카메라 판정과는
+        # 무관한 별도 물리 카메라이므로, 지정 중에도 메인 캔버스는 정상 동작한다.
+        self._side_calibrating = False
+        self._side_baseline_picker: SideBaselinePicker | None = None
+        self._side_message: str | None = None
+        self._side_message_ok = True
 
     @property
     def pen_requested(self) -> bool:
@@ -271,6 +330,14 @@ class WhiteboardSession:
             contact_last_error_px=(
                 estimator.last_reprojection_error_px if estimator is not None else None
             ),
+            has_side_contact=self._tracker.has_side_contact,
+            side_pen_down=frame.side_pen_down if frame is not None else None,
+            side_distance_px=frame.side_distance_px if frame is not None else None,
+            is_side_calibrating=self._side_calibrating,
+            has_ml_pen_state=self._tracker.has_ml_pen_state,
+            use_ml_pen_state=self._tracker.use_ml_pen_state,
+            ml_pen_down=frame.ml_pen_down if frame is not None else None,
+            ml_confidence=frame.ml_confidence if frame is not None else None,
         )
 
     # ------------------------------------------------------------------
@@ -295,6 +362,27 @@ class WhiteboardSession:
         """디버그 오버레이를 토글하고 결과 상태를 반환한다."""
         self.set_debug_3d(not self._debug_3d)
         return self._debug_3d
+
+    # ------------------------------------------------------------------
+    # ML 판정 (D파트 학습 모델, 휴리스틱과 수동 토글)
+    # ------------------------------------------------------------------
+    @property
+    def has_ml_pen_state(self) -> bool:
+        """ML 판정을 쓸 수 있는 상태인지(모델이 로드됐는지)."""
+        return self._tracker.has_ml_pen_state
+
+    @property
+    def use_ml_pen_state(self) -> bool:
+        """지금 pen_ratio 대신 ML 판정을 쓰도록 켜져 있는지."""
+        return self._tracker.use_ml_pen_state
+
+    def set_use_ml_pen_state(self, enabled: bool) -> None:
+        """ML 판정 사용 여부를 켜고 끈다 (모델이 없으면 켜도 조용히 무시됨)."""
+        self._tracker.set_use_ml_pen_state(enabled)
+
+    def toggle_ml_pen_state(self) -> bool:
+        """ML 판정 토글하고 결과 상태를 반환한다."""
+        return self._tracker.toggle_ml_pen_state()
 
     @property
     def intrinsics(self) -> CameraIntrinsics | None:
@@ -354,9 +442,9 @@ class WhiteboardSession:
         """캘리브레이션 모드로 진입한다. 이미 캘리브레이션이 있어도 재지정할 수 있다
         (``confirm_calibration()``으로 확정하기 전까지 기존 캘리브레이션은 그대로 유효).
 
-        터치 캘리브레이션과 동시에 진행할 수 없다 — 진행 중이면 무시된다.
+        터치 캘리브레이션·측면 기준선 지정과 동시에 진행할 수 없다 — 진행 중이면 무시된다.
         """
-        if self._touch_calibrating:
+        if self._touch_calibrating or self._side_calibrating:
             return
         self._calibrating = True
         self._calibration_picker = CalibrationPicker()
@@ -473,9 +561,9 @@ class WhiteboardSession:
     def start_touch_calibration(self) -> None:
         """터치 임계값 캘리브레이션을 시작한다: hover 단계부터.
 
-        4점 캘리브레이션과 동시에 진행할 수 없다 — 진행 중이면 무시된다.
+        4점 캘리브레이션·측면 기준선 지정과 동시에 진행할 수 없다 — 진행 중이면 무시된다.
         """
-        if self._calibrating:
+        if self._calibrating or self._side_calibrating:
             return
         self._touch_calibrating = True
         self._touch_phase = "hover"
@@ -651,8 +739,14 @@ class WhiteboardSession:
             return False
         return self._pipeline.submit(self._canvas.image.copy())
 
-    def process_frame(self, bgr_frame: np.ndarray) -> np.ndarray:
-        """Run tracking + stroke recording and return the annotated frame."""
+    def process_frame(self, bgr_frame: np.ndarray, *, side_frame: np.ndarray | None = None) -> np.ndarray:
+        """Run tracking + stroke recording and return the annotated frame.
+
+        ``side_frame``(측면 카메라 프레임)을 함께 주면, 측면 기준선이 설정된 한 그 신호가
+        3D/pen_ratio보다 우선해 pen up/down을 판정한다(``core.pen_tracker.PenTracker.process``
+        참고). 캘리브레이션/터치 캘리브레이션 중에는 메인 카메라 흐름만 갱신하고 측면은
+        건드리지 않는다 — 측면 기준선 지정은 별도로 ``B`` 키로 진행하며 메인 흐름과 독립적이다.
+        """
         # 모드(캘리브레이션 포함)와 무관하게 매 프레임 소비한다 — 완료된 작업이 다음
         # trigger_ocr() 호출에 유실되지 않도록, 그리고 캘리브레이션 중에도 백그라운드
         # 결과가 계속 반영되도록.
@@ -696,7 +790,7 @@ class WhiteboardSession:
                 message=self.touch_message,
             )
 
-        result = self._tracker.process(bgr_frame)
+        result = self._tracker.process(bgr_frame, side_frame=side_frame)
         fingertip = result.fingertip
         self._last_frame = result
 
@@ -751,6 +845,8 @@ class WhiteboardSession:
         mode_label = f"MODE: {self.mode_name}"
         mode_label += "  CAL:OK" if self._calibration is not None else "  CAL:NONE"
         mode_label += "  3D" if self._tracker.has_3d_contact else "  2D"
+        if self._tracker.has_side_contact:
+            mode_label += "  SIDE"
         cv2.putText(
             annotated,
             mode_label,
@@ -792,6 +888,108 @@ class WhiteboardSession:
                 show_panel=self._render_3d_debug_inline,
             )
         return annotated
+
+    # ------------------------------------------------------------------
+    # 측면(폰) 카메라 기준선 지정
+    # ------------------------------------------------------------------
+    @property
+    def is_side_calibrating(self) -> bool:
+        return self._side_calibrating
+
+    @property
+    def has_side_contact(self) -> bool:
+        """측면 카메라 접촉 판정을 쓸 수 있는 상태인지(기준선 설정됨)."""
+        return self._tracker.has_side_contact
+
+    @property
+    def side_baseline_picker(self) -> SideBaselinePicker | None:
+        return self._side_baseline_picker
+
+    @property
+    def side_message(self) -> tuple[str, bool] | None:
+        return None if self._side_message is None else (self._side_message, self._side_message_ok)
+
+    def start_side_calibration(self) -> None:
+        """측면 기준선 지정 모드로 진입한다. 이미 기준선이 있어도 재지정할 수 있다.
+
+        4점/터치 캘리브레이션과 동시에 진행할 수 없다 — 진행 중이면 무시된다. 메인 카메라
+        판정과는 무관한 별도 물리 카메라이므로, 지정 중에도 메인 캔버스는 정상 동작한다
+        (``_tracker.reset()``을 부르지 않는 이유).
+        """
+        if self._calibrating or self._touch_calibrating:
+            return
+        self._side_calibrating = True
+        self._side_baseline_picker = SideBaselinePicker()
+        self._side_message = None
+        self._side_message_ok = True
+
+    def add_side_baseline_point(self, x: float, y: float) -> None:
+        """측면 기준선 지정 모드일 때만 좌표를 점으로 추가한다 (그 외엔 무시). 마우스 클릭용."""
+        if not self._side_calibrating or self._side_baseline_picker is None:
+            return
+        self._side_baseline_picker.add_point(x, y)
+        self._side_message = None
+
+    def undo_side_baseline_point(self) -> None:
+        if self._side_calibrating and self._side_baseline_picker is not None:
+            self._side_baseline_picker.undo()
+            self._side_message = None
+
+    def reset_side_baseline_points(self) -> None:
+        if self._side_calibrating and self._side_baseline_picker is not None:
+            self._side_baseline_picker.reset()
+            self._side_message = None
+
+    def confirm_side_calibration(self) -> bool:
+        """2점이 유효하면 저장·적용하고 지정 모드를 종료한다.
+
+        반환값은 성공 여부. 실패(미완료·퇴화 2점) 시 ``side_message``에 이유가 남고
+        지정 모드는 유지된다(재시도 가능).
+        """
+        if not self._side_calibrating or self._side_baseline_picker is None:
+            return False
+        baseline, err = self._side_baseline_picker.try_build()
+        if baseline is None:
+            self._side_message = err or "Click 2 points first."
+            self._side_message_ok = False
+            return False
+
+        self._tracker.set_side_baseline(baseline, down_px=self._side_down_px, up_px=self._side_up_px)
+        if self._side_baseline_path is not None:
+            baseline.save(self._side_baseline_path)
+        self._side_calibrating = False
+        self._side_baseline_picker = None
+        self._side_message = f"Side baseline applied (down={self._side_down_px:.0f}px up={self._side_up_px:.0f}px)"
+        self._side_message_ok = True
+        return True
+
+    def cancel_side_calibration(self) -> None:
+        """측면 기준선 지정을 취소한다. 기존 기준선(있었다면)은 그대로 유지된다."""
+        self._side_calibrating = False
+        self._side_baseline_picker = None
+        self._side_message = None
+
+    def render_side_frame(self, side_bgr_frame: np.ndarray) -> np.ndarray:
+        """측면 카메라 창에 그릴 프레임을 만든다 — 지정 중이면 점 찍기 UI, 아니면 실행 중 상태.
+
+        실행 중 상태는 ``process_frame()``이 이미 계산해 둔 마지막 ``PenFrame``의
+        ``side_distance_px``/``side_pen_down``을 그대로 쓴다 — 여기서 다시 MediaPipe를
+        돌리지 않는다(같은 프레임을 두 번 처리하는 비용을 피함).
+        """
+        if self._side_calibrating:
+            return overlay.draw_side_calibration_overlay(
+                side_bgr_frame, picker=self._side_baseline_picker, message=self.side_message,
+            )
+        frame = self._last_frame
+        detector = self._tracker.side_detector
+        return overlay.draw_side_status_overlay(
+            side_bgr_frame,
+            baseline=self._tracker.side_baseline,
+            side_distance_px=frame.side_distance_px if frame is not None else None,
+            side_pen_down=frame.side_pen_down if frame is not None else None,
+            down_px=detector.down_px if detector is not None else self._side_down_px,
+            up_px=detector.up_px if detector is not None else self._side_up_px,
+        )
 
     def _draw_to(self, fingertip: tuple[int, int]) -> None:
         """펜을 내린 상태로 손끝 위치까지 획을 잇는다."""

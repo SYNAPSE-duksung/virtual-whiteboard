@@ -22,6 +22,9 @@ python -m controller.main
 | `--intrinsics PATH` | `output/camera_intrinsics.json` | 카메라 내부 파라미터. 없으면 화각 60° 가정으로 근사 |
 | `--no-3d` | 꺼짐 | 3D 접촉 판정을 끄고 기존 `pen_ratio` 휴리스틱만 사용 |
 | `--debug-3d` | 꺼짐 | 3D 디버그 오버레이를 켠 채로 시작 (실행 중 `D`로 토글) |
+| `--side-camera N` | 없음(비활성) | 측면(폰) 카메라 장치 인덱스. 지정하면 별도 SIDE 창이 뜨고, 그 신호가 3D/pen_ratio보다 우선한다 (듀얼 카메라 계획, `CLAUDE.md` 참고) |
+| `--side-baseline PATH` | `output/side_baseline.json` | 측면 기준선(책상면) 저장/로드 경로 |
+| `--side-down-px` / `--side-up-px` | `20` / `35` | 측면 접촉 히스테리시스 문턱(px). 카메라-책상 거리·해상도에 따라 다른 임시값 — 실측 후 조정 필요 |
 
 예:
 
@@ -160,6 +163,36 @@ python -m controller.main --calibration output/my_desk.json
 > 오버레이 문구가 모두 영문인 것은 의도적이다 — OpenCV의 Hershey 폰트에는 한글 글리프가
 > 없어 한글을 넣으면 `?????`로 깨진다. PyQt 쪽 상태 라벨은 한글로 표시된다.
 
+## 측면(폰) 카메라 접촉 판정 (`--side-camera` / `B` 키)
+
+듀얼 카메라 계획(`CLAUDE.md` "듀얼 카메라 기반 pen up/down 개선 + 글자 복원 실험 계획"
+참고)의 실시간 버전이다. 노트북 카메라 하나로 궤적 복원과 pen up/down을 동시에 잘하기
+어렵다는 판단에서, **측면(책상 높이 옆모습) 카메라를 접촉 판정 전용으로 추가**한다.
+
+```
+python -m controller.main --side-camera 1
+```
+
+- `--side-camera`를 지정하면 메인 창과 별도로 **SIDE** 창이 뜬다. 폰을 책상 높이에서
+  옆모습이 보이도록(손끝과 책상 접촉면이 화면에 나오게) 배치할 것 — `tools/README.md`
+  4절의 촬영 프로토콜과 동일한 배치다.
+- **기준선 지정(`B` 키)**: SIDE 창에서 책상 가장자리 위의 두 점을 클릭하면 그 직선이
+  "책상면"이 된다. 손끝에서 이 선까지의 수직 거리(px)가 작을수록 접촉으로 판정한다
+  (`Z` 취소 / `X` 리셋 / `Enter`,`S` 적용 / `Esc` 취소). 적용하면 `output/side_baseline.json`에
+  저장되어 다음 실행 때 자동으로 불러온다 — 카메라를 옮기지 않는 한 매번 다시 잡을 필요는 없다.
+- **우선순위**: 기준선이 설정된 프레임에서 측면 손이 검출되면, 그 신호가 **3D 판정·pen_ratio보다
+  우선**해 pen up/down을 결정한다. 그 프레임에 측면 손이 안 잡히면 그 프레임만 3D/pen_ratio로
+  조용히 폴백한다(3D→pen_ratio 폴백과 같은 방식). 메인 창 하단 `MODE:` 배지에 `SIDE`가
+  붙어 있으면 측면 신호가 활성 상태라는 뜻이다.
+- **문턱 조정**: `--side-down-px`/`--side-up-px`(기본 20/35px)는 카메라-책상 거리·해상도에
+  따라 달라지는 임시값이다. SIDE 창에는 항상 현재 거리(px)·문턱·접촉 여부가 표시되므로,
+  이 값을 보며 `--side-down-px`/`--side-up-px`를 조정하거나 실측 기반 재추정(추후
+  `core.touch_calibration.estimate_thresholds()` 적용 예정)을 진행할 수 있다.
+- **PyQt(`ui/app.py`)**: `python -m ui.app --side-camera N`으로 두 번째 영상 창을 띄우고
+  상태(거리·접촉 여부)를 볼 수 있지만, **기준선 대화형 지정은 아직 지원하지 않는다** —
+  먼저 `controller/main.py`에서 `B`로 한 번 지정해 `output/side_baseline.json`에 저장해두면
+  PyQt 쪽은 그 파일을 자동으로 불러와 쓴다(4점 캘리브레이션과 동일한 역할 분담).
+
 ## 키 조작
 
 **일반 모드**
@@ -171,6 +204,7 @@ python -m controller.main --calibration output/my_desk.json
 | `K` | 4점 캘리브레이션 (재)시작 |
 | `T` | 접촉 캘리브레이션 (재)시작 — 3D 영점 + pen_ratio 임계값 |
 | `D` | 3D 디버그 오버레이 on/off (평면 수선 벡터 · 높이 게이지 · 수치 패널) |
+| `B` | 측면 기준선 (재)지정 시작 — `--side-camera` 지정 시에만 동작, SIDE 창에서 2점 클릭 |
 | `R` | 좌표 CSV 기록 on/off (`output/coords_*.csv`) |
 | `C` | 캔버스 지우기 |
 | `S` | 캔버스를 PNG로 저장 (`captures/canvas_<timestamp>.png`) |
@@ -203,6 +237,7 @@ python -m controller.main --calibration output/my_desk.json
 | 경로 | 내용 |
 |---|---|
 | `output/calibration.json` | 4점 캘리브레이션 (`core.geometry.PerspectiveCalibration`) |
+| `output/side_baseline.json` | 측면 카메라 기준선 (`B` 키, `core.side_contact.SideBaseline`) |
 | `output/coords_*.csv` | 좌표 기록 (`R` 키, `core.recorder.CoordRecorder`) |
 | `captures/canvas_*.png` | 저장한 캔버스 (`S` 키) |
 
