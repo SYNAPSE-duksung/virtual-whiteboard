@@ -24,6 +24,7 @@ __all__ = [
     "STATUS_DONE",
     "STATUS_ERROR",
     "PipelineResult",
+    "LlmStageError",
     "placeholder_ocr",
     "placeholder_llm",
     "OcrLlmPipelineWorker",
@@ -34,6 +35,8 @@ STATUS_RUNNING = "RUNNING"
 STATUS_DONE = "DONE"
 STATUS_ERROR = "ERROR"
 
+DEFAULT_TIMEOUT_SEC = 120.0
+
 
 @dataclass(frozen=True, slots=True)
 class PipelineResult:
@@ -43,6 +46,19 @@ class PipelineResult:
     ocr_text: str | None
     corrected_text: str | None
     error: str | None
+
+
+class LlmStageError(RuntimeError):
+    """``llm_fn``이 실패했을 때, 이미 성공한 ``ocr_text``를 실어 나르기 위한 예외.
+
+    OCR 자체는 성공했는데 그 다음 LLM 교정만 실패한 경우, 일반 예외로 처리하면
+    ``poll()``이 ``ocr_text``까지 통째로 버리게 된다. 이 예외는 ``ocr_text``를
+    속성으로 들고 있어 ``poll()``이 ERROR 상태에서도 그 텍스트를 보존할 수 있게 한다.
+    """
+
+    def __init__(self, ocr_text: str, cause: BaseException) -> None:
+        super().__init__(str(cause))
+        self.ocr_text = ocr_text
 
 
 def placeholder_ocr(image: np.ndarray) -> str:
@@ -74,11 +90,14 @@ class OcrLlmPipelineWorker:
         *,
         ocr_fn=placeholder_ocr,
         llm_fn=placeholder_llm,
+        timeout_sec: float = DEFAULT_TIMEOUT_SEC,
     ) -> None:
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ocr-llm")
         self._ocr_fn = ocr_fn
         self._llm_fn = llm_fn
+        self._timeout_sec = timeout_sec
         self._future: Future | None = None
+        self._submitted_at: float | None = None
         self._last_result = PipelineResult(STATUS_IDLE, None, None, None)
 
     @property
@@ -93,11 +112,15 @@ class OcrLlmPipelineWorker:
         if self.is_running:
             return False
         self._future = self._executor.submit(self._run, image)
+        self._submitted_at = time.monotonic()
         return True
 
     def _run(self, image: np.ndarray) -> tuple[str, str]:
         ocr_text = self._ocr_fn(image)
-        corrected_text = self._llm_fn(ocr_text)
+        try:
+            corrected_text = self._llm_fn(ocr_text)
+        except Exception as exc:  # noqa: BLE001 — ocr_text를 실어 보존하기 위해 감싼다.
+            raise LlmStageError(ocr_text, exc) from exc
         return ocr_text, corrected_text
 
     def poll(self) -> PipelineResult:
@@ -106,12 +129,32 @@ class OcrLlmPipelineWorker:
         if future is None:
             return self._last_result
         if not future.done():
+            if (
+                self._submitted_at is not None
+                and time.monotonic() - self._submitted_at > self._timeout_sec
+            ):
+                # generate()가 멈춘 스레드는 안전하게 강제 종료할 수 없다 — 추적을
+                # 포기하고 새 실행기로 교체해, 그 스레드는 백그라운드에서 홀로 계속
+                # 돌게 두고(자원은 소모하지만) 이후 트리거는 즉시 다시 가능하게 한다.
+                self._last_result = PipelineResult(
+                    STATUS_ERROR,
+                    None,
+                    None,
+                    f"시간 초과({self._timeout_sec:.0f}초) — 이전 작업은 백그라운드에서 계속 실행됩니다.",
+                )
+                self._future = None
+                self._submitted_at = None
+                self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ocr-llm")
+                return self._last_result
             self._last_result = PipelineResult(STATUS_RUNNING, None, None, None)
             return self._last_result
 
         self._future = None  # 정확히 한 번만 소비.
+        self._submitted_at = None
         try:
             ocr_text, corrected_text = future.result()
+        except LlmStageError as exc:
+            self._last_result = PipelineResult(STATUS_ERROR, exc.ocr_text, None, str(exc))
         except Exception as exc:  # noqa: BLE001 — 예외 종류를 가리지 않고 상태로 변환한다.
             self._last_result = PipelineResult(STATUS_ERROR, None, None, str(exc))
         else:
