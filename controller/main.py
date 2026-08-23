@@ -217,6 +217,10 @@ def main() -> int:
                 fps = 1.0 / max(current_time - previous_time, 1e-6)
                 previous_time = current_time
                 cv2.putText(annotated, f"FPS {fps:.1f}", (15, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+                if debug.pipeline_status == "RUNNING":
+                    # 트래킹/그리기는 그대로 계속 돌아가므로(비차단), 콘솔만 보고 있지
+                    # 않아도 처리 중인 걸 알 수 있게 작은 배지만 얹는다 — 화면을 막지 않음.
+                    cv2.putText(annotated, "OCR/LLM: RUNNING", (15, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 200, 255), 2)
                 cv2.imshow(_WINDOW_NAME, annotated)
 
                 key = cv2.waitKey(1) & 0xFF
