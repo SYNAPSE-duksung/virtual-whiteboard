@@ -14,7 +14,10 @@ LLM 교정 모듈
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
-from ocr_infer import run_ocr, run_ocr_folder
+try:
+    from ai.ocr_infer import run_ocr, run_ocr_folder
+except ImportError:
+    from ocr_infer import run_ocr, run_ocr_folder
 
 
 BASE_MODEL = "google/gemma-4-E2B-it"

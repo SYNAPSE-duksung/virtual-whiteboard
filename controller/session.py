@@ -15,6 +15,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from ai.pipeline import llm_stage, ocr_stage
 from controller import overlay
 from controller.ocr_llm_pipeline import OcrLlmPipelineWorker, PipelineResult
 from controller.ocr_llm_pipeline import STATUS_IDLE as _PIPELINE_IDLE
@@ -200,7 +201,7 @@ class WhiteboardSession:
             loss_tolerance_sec=loss_tolerance_sec,
             erase_confirm_sec=erase_confirm_sec,
         )
-        self._pipeline = OcrLlmPipelineWorker()
+        self._pipeline = OcrLlmPipelineWorker(ocr_fn=ocr_stage, llm_fn=llm_stage)
         self._last_pipeline_result = PipelineResult(_PIPELINE_IDLE, None, None, None)
         self._line_color = line_color
         self._line_thickness = line_thickness

@@ -14,8 +14,12 @@ OCR 모듈
 from pathlib import Path
 
 import easyocr
+import numpy as np
 
-from preprocess import preprocess_image
+try:
+    from ai.preprocess import DEFAULT_METHOD, preprocess_array, preprocess_image
+except ImportError:
+    from preprocess import DEFAULT_METHOD, preprocess_array, preprocess_image
 
 
 LANGS = ["ko", "en"]
@@ -23,8 +27,9 @@ GPU = False
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
 
-# preprocess.py의 method와 반드시 맞춰야 함
-PREPROCESS_METHOD = "clahe"
+# preprocess.py의 DEFAULT_METHOD를 그대로 따른다 (문자열을 여기서 다시 하드코딩하면
+# 두 파일이 조용히 어긋날 수 있음).
+PREPROCESS_METHOD = DEFAULT_METHOD
 
 # 튜닝 결과로 나온 최적 조합으로 교체 가능
 DETECT_PARAMS = {
@@ -52,13 +57,8 @@ def get_reader() -> easyocr.Reader:
     return _reader
 
 
-def run_ocr(image_path: str, preprocess_method: str = PREPROCESS_METHOD) -> str:
-    """
-    이미지 경로를 받아 전처리 -> OCR을 수행하고,
-    인식된 텍스트를 하나의 문자열로 합쳐서 반환한다.
-    """
-
-    img = preprocess_image(image_path, method=preprocess_method)
+def _read_text(img: np.ndarray) -> str:
+    """전처리된 이미지에 OCR을 돌려 인식된 텍스트를 하나의 문자열로 합친다."""
 
     reader = get_reader()
 
@@ -71,9 +71,28 @@ def run_ocr(image_path: str, preprocess_method: str = PREPROCESS_METHOD) -> str:
     )
 
     texts = [item[1] for item in result]
-    joined_text = " ".join(texts)
+    return " ".join(texts)
 
-    return joined_text
+
+def run_ocr(image_path: str, preprocess_method: str = PREPROCESS_METHOD) -> str:
+    """
+    이미지 경로를 받아 전처리 -> OCR을 수행하고,
+    인식된 텍스트를 하나의 문자열로 합쳐서 반환한다.
+    """
+
+    img = preprocess_image(image_path, method=preprocess_method)
+    return _read_text(img)
+
+
+def run_ocr_array(image: np.ndarray, preprocess_method: str = PREPROCESS_METHOD) -> str:
+    """
+    이미 메모리에 있는 이미지(ndarray)를 받아 전처리 -> OCR을 수행한다.
+    ``run_ocr``와 달리 디스크에 쓰고 다시 읽는 왕복 없이 바로 처리한다 — 캔버스
+    스냅샷 등 이미 배열로 들고 있는 이미지를 넘길 때 사용한다.
+    """
+
+    img = preprocess_array(image, method=preprocess_method)
+    return _read_text(img)
 
 
 def collect_images(image_dir: str, recursive: bool = True) -> list[str]:

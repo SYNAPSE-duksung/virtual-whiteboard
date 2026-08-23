@@ -15,10 +15,16 @@
 import cv2
 import numpy as np
 
+# ocr_infer.py 등 다른 모듈이 재사용하는 기본 method. 여기서만 정의하고 다른 곳은
+# 이 값을 import해서 쓴다 — 문자열을 각자 하드코딩하면 두 곳이 조용히 어긋날 수 있다.
+DEFAULT_METHOD = "clahe"
 
-def preprocess_image(image_path: str, method: str = "clahe") -> np.ndarray:
+
+def preprocess_array(image: np.ndarray, method: str = DEFAULT_METHOD) -> np.ndarray:
     """
-    이미지를 읽어서 지정한 방식으로 전처리한 결과를 반환한다.
+    이미 메모리에 있는 이미지(ndarray)를 지정한 방식으로 전처리한 결과를 반환한다.
+    ``preprocess_image``와 로직은 동일하되, 디스크 read를 하지 않는다 — 캔버스
+    스냅샷처럼 이미 배열로 들고 있는 이미지를 파일로 왕복시키지 않기 위함.
 
     method:
         - "gray"            : 그레이스케일만 적용 (기준값)
@@ -26,12 +32,10 @@ def preprocess_image(image_path: str, method: str = "clahe") -> np.ndarray:
         - "adaptive_thresh" : 배경 밝기가 일정하지 않을 때 사용
     """
 
-    img = cv2.imread(image_path)
+    if image is None:
+        raise ValueError("전처리할 이미지가 없습니다 (None).")
 
-    if img is None:
-        raise ValueError(f"이미지를 읽을 수 없습니다: {image_path}")
-
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image
 
     if method == "gray":
         return gray
@@ -52,6 +56,21 @@ def preprocess_image(image_path: str, method: str = "clahe") -> np.ndarray:
 
     else:
         raise ValueError(f"알 수 없는 전처리 method: {method}")
+
+
+def preprocess_image(image_path: str, method: str = DEFAULT_METHOD) -> np.ndarray:
+    """
+    이미지를 읽어서 지정한 방식으로 전처리한 결과를 반환한다.
+
+    method: ``preprocess_array`` 참고.
+    """
+
+    img = cv2.imread(image_path)
+
+    if img is None:
+        raise ValueError(f"이미지를 읽을 수 없습니다: {image_path}")
+
+    return preprocess_array(img, method=method)
 
 
 if __name__ == "__main__":
