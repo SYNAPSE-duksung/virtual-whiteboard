@@ -162,6 +162,7 @@ class WhiteboardWindow(QMainWindow):
         if side_camera_index is not None:
             self._side_camera = cv2.VideoCapture(side_camera_index)
             if not self._side_camera.isOpened():
+                self._camera.release()
                 raise RuntimeError(f"측면 카메라 {side_camera_index}을(를) 열 수 없습니다.")
 
         session_kwargs = {}
@@ -657,15 +658,22 @@ def main() -> int:
     args = parser.parse_args()
 
     app = QApplication(sys.argv)
-    window = WhiteboardWindow(
-        args.camera,
-        mirror=args.mirror,
-        flip_vertical=args.flip_vertical,
-        side_camera_index=args.side_camera,
-        side_baseline_path=args.side_baseline,
-        pen_model_path=args.pen_model,
-        use_ml_pen_state=args.use_ml_pen_state,
-    )
+    try:
+        window = WhiteboardWindow(
+            args.camera,
+            mirror=args.mirror,
+            flip_vertical=args.flip_vertical,
+            side_camera_index=args.side_camera,
+            side_baseline_path=args.side_baseline,
+            pen_model_path=args.pen_model,
+            use_ml_pen_state=args.use_ml_pen_state,
+        )
+    except RuntimeError as exc:
+        # 카메라를 못 열면 여기서 바로 실패한다(트래킹 손실과 달리 세션 시작 전이라
+        # 재시도할 여지가 없음) — controller/main.py의 콘솔 메시지 + 정상 종료와
+        # 동일하게, 트레이스백 없이 깔끔히 알리고 종료한다.
+        print(exc)
+        return 1
     window.show()
     return app.exec()
 
