@@ -8,6 +8,7 @@ LLM 교정 모듈
 
 사용법 (단독 실행, 전체 파이프라인 실행):
     python llm_correct.py 이미지경로.jpg
+    
 """
 
 import torch

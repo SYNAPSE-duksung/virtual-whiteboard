@@ -11,6 +11,7 @@
     python preprocess.py 이미지경로.jpg adaptive_thresh
 """
 
+
 import cv2
 import numpy as np
 

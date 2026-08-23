@@ -10,6 +10,7 @@ OCR 모듈
     python ocr_infer.py 이미지경로.jpg
 """
 
+
 from pathlib import Path
 
 import easyocr
