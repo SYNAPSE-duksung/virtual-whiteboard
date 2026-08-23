@@ -72,37 +72,41 @@ def load_ground_truth(json_path: str) -> dict:
         return json.load(f)
 
 # ------------------------------------------------------------------
-# 1. 전처리 함수들 (손글씨에 특히 영향 큼)
+# 1. 전처리 함수들
 # ------------------------------------------------------------------
 def preprocess_variants(image_path):
-    """같은 이미지에 대해 여러 전처리 버전을 만들어서 반환"""
+    """손글씨 OCR용 최소 전처리 3종"""
     img = cv2.imread(image_path)
+
+    if img is None:
+        raise ValueError(f"이미지를 읽을 수 없습니다: {image_path}")
+
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
     variants = {}
 
-    # 원본 (그레이스케일만)
+    # 1. 원본 그레이스케일
+    # 가장 기본적인 기준값
     variants["gray"] = gray
 
-    # 대비 향상 (CLAHE)
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    # 2. CLAHE
+    # 글씨와 배경의 대비를 조금 강화
+    clahe = cv2.createCLAHE(
+        clipLimit=2.0,
+        tileGridSize=(8, 8)
+    )
     variants["clahe"] = clahe.apply(gray)
 
-    # 적응형 이진화 (손글씨 배경 얼룩 제거에 효과적)
+    # 3. Adaptive Threshold
+    # 배경 밝기가 일정하지 않은 이미지에 대응
     variants["adaptive_thresh"] = cv2.adaptiveThreshold(
-        gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-        cv2.THRESH_BINARY, 31, 15
+        gray,
+        255,
+        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY,
+        31,
+        15
     )
-
-    # 노이즈 제거 + 이진화
-    denoised = cv2.fastNlMeansDenoising(gray, h=10)
-    _, otsu = cv2.threshold(denoised, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    variants["denoise_otsu"] = otsu
-
-    # 업스케일 (손글씨가 작을 때 인식률 개선에 도움)
-    h, w = gray.shape
-    upscaled = cv2.resize(gray, (w * 2, h * 2), interpolation=cv2.INTER_CUBIC)
-    variants["upscale_2x"] = upscaled
 
     return variants
 
@@ -161,7 +165,7 @@ def run_grid_search():
     recog_keys = list(RECOGNIZE_PARAM_GRID.keys())
     recog_combos = list(itertools.product(*RECOGNIZE_PARAM_GRID.values()))
 
-    total_calls = len(image_paths) * 5 * len(detect_combos) * len(recog_combos)  # 5 = 전처리 종류 수
+    total_calls = len(image_paths) * 3 * len(detect_combos) * len(recog_combos)
     print(f"총 {total_calls}번의 OCR 호출 예정.")
 
     results = []
