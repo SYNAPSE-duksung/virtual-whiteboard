@@ -19,6 +19,7 @@ from controller.session import WhiteboardSession
 from core.camera import DEFAULT_INTRINSICS_PATH
 from core.contact3d import DEFAULT_PLANE_SIZE_MM
 from core.geometry import DEFAULT_CALIBRATION_PATH
+from core.ml_pen_state import DEFAULT_MODEL_PATH as DEFAULT_ML_MODEL_PATH
 from core.side_contact import (
     DEFAULT_BASELINE_PATH,
     DEFAULT_DOWN_PX as DEFAULT_SIDE_DOWN_PX,
@@ -89,6 +90,24 @@ def main() -> int:
     )
     parser.add_argument("--side-down-px", type=float, default=DEFAULT_SIDE_DOWN_PX)
     parser.add_argument("--side-up-px", type=float, default=DEFAULT_SIDE_UP_PX)
+    parser.add_argument(
+        "--pen-model",
+        type=str,
+        default=str(DEFAULT_ML_MODEL_PATH),
+        metavar="PATH",
+        help="D파트가 학습한 pen up/down ML 모델(joblib) 경로. 없거나 로드 실패해도 조용히 "
+             "휴리스틱만 사용 (기본 ml_results/logistic_regression.joblib)",
+    )
+    parser.add_argument(
+        "--no-pen-model",
+        action="store_true",
+        help="ML 모델을 아예 로드하지 않는다 (joblib/scikit-learn 미설치 환경 등)",
+    )
+    parser.add_argument(
+        "--use-ml-pen-state",
+        action="store_true",
+        help="시작할 때부터 pen_ratio 휴리스틱 대신 ML 판정 사용 (실행 중 P로 전환)",
+    )
     args = parser.parse_args()
 
     camera = cv2.VideoCapture(args.camera)
@@ -104,7 +123,8 @@ def main() -> int:
             camera.release()
             return 1
 
-    print("M: 모드 전환 | K: 4점 캘리브레이션 | T: 접촉 캘리브레이션(3D 영점 포함) | D: 3D 디버그 표시 | O: OCR 트리거 | C: 지우기 | S: 저장 | Q: 종료")
+    print("M: 모드 전환 | K: 4점 캘리브레이션 | T: 접촉 캘리브레이션(3D 영점 포함) | D: 3D 디버그 표시 | "
+          "P: ML/휴리스틱 전환 | O: OCR 트리거 | C: 지우기 | S: 저장 | Q: 종료")
     if side_camera is not None:
         print("B: 측면 기준선 지정 (SIDE 창에서 클릭)")
     if not args.no_3d:
@@ -122,6 +142,8 @@ def main() -> int:
             side_baseline_path=args.side_baseline,
             side_down_px=args.side_down_px,
             side_up_px=args.side_up_px,
+            ml_model_path=None if args.no_pen_model else args.pen_model,
+            use_ml_pen_state=args.use_ml_pen_state,
         ) as session:
             if args.debug_3d:
                 session.set_debug_3d(True)
@@ -259,6 +281,10 @@ def main() -> int:
                 elif key == ord("m"):
                     auto = session.toggle_mode()
                     print(f"모드 전환: {'자동(손끝 판정)' if auto else '수동(SPACE 펜)'}")
+                elif key == ord("p"):
+                    on = session.toggle_ml_pen_state()
+                    print(f"[ML 판정] {'사용' if on else '미사용(휴리스틱)'}"
+                          + ("" if session.has_ml_pen_state else " (※ ML 모델이 로드되지 않았습니다)"))
                 elif key == ord("o"):
                     if not session.trigger_ocr():
                         print("[OCR/LLM] 이전 작업 처리 중 — 잠시 후 다시 시도하세요.")
