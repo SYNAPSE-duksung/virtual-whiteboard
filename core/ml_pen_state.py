@@ -15,6 +15,7 @@ LogisticRegression/SVM)에 넣는다. 반드시 ``normalized_landmarks``만 입�
 from __future__ import annotations
 
 import math
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -28,7 +29,7 @@ from core.distances import (
     WRIST,
 )
 
-DEFAULT_MODEL_PATH = Path("ml_results/logistic_regression.joblib")
+DEFAULT_MODEL_PATH = Path("model/logistic_regression.joblib")
 
 #: 모델 입력 feature 순서. ``scripts/train_pen_state.py``의 ``feature_cols``와 정확히
 #: 같아야 한다 — 순서가 어긋나면 학습된 스케일러/계수가 엉뚱한 값에 적용된다.
@@ -108,14 +109,23 @@ def compute_features(
 class MLPenStateDetector:
     """학습된 joblib 파이프라인(``StandardScaler`` + 분류기)으로 pen up/down을 예측한다."""
 
-    def __init__(self, model, *, model_path: Path | None = None) -> None:
+    def __init__(
+        self, model, *, model_path: Path | None = None, down_threshold: float = 0.4
+    ) -> None:
         self._model = model
         self.model_path = model_path
         self._prev_tip_raw: np.ndarray | None = None
         self._supports_proba = hasattr(model, "predict_proba")
+        # class 1(pen_down) 확률이 이 값 이상이면 down으로 판정한다. sklearn
+        # predict()의 기본 0.5보다 살짝 낮춰(0.4) down 인정을 조금 더 관대하게 한다 —
+        # predict_proba를 지원하지 않는 모델(probability=True 없이 학습된 SVM 등)은
+        # confidence 자체가 없으므로 predict()의 기본 판정을 그대로 쓴다.
+        self._down_threshold = float(down_threshold)
 
     @classmethod
-    def load(cls, path: str | Path = DEFAULT_MODEL_PATH) -> "MLPenStateDetector":
+    def load(
+        cls, path: str | Path = DEFAULT_MODEL_PATH, *, down_threshold: float = 0.4
+    ) -> "MLPenStateDetector":
         """joblib 모델을 불러온다.
 
         언피클링은 실패 유형이 열려 있다(버전 불일치 시 ``AttributeError``, 라이브러리
@@ -125,7 +135,7 @@ class MLPenStateDetector:
         import joblib  # 지연 import: scikit-learn/joblib 없는 환경에서도 core는 임포트 가능해야 함
 
         model = joblib.load(Path(path))
-        return cls(model, model_path=Path(path))
+        return cls(model, model_path=Path(path), down_threshold=down_threshold)
 
     @property
     def supports_confidence(self) -> bool:
@@ -137,8 +147,20 @@ class MLPenStateDetector:
         features, tip_raw = compute_features(normalized_landmarks, prev_tip_raw=self._prev_tip_raw)
         self._prev_tip_raw = tip_raw
         x = features.reshape(1, -1)
-        pen_down = bool(int(self._model.predict(x)[0]))
-        confidence = float(self._model.predict_proba(x)[0, 1]) if self._supports_proba else None
+        # 학습은 컬럼명 있는 pandas DataFrame으로 했지만(train_pen_state.py), 여기선
+        # 매 프레임 numpy 배열을 넣는다 — sklearn이 "feature names 없음" UserWarning을
+        # 프레임마다(초당 수십 번) 띄워 콘솔을 도배한다. FEATURE_COLUMNS 순서만 맞으면
+        # 예측 자체엔 아무 영향 없는 경고라 이 호출 지점에서만 조용히 무시한다.
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore", message="X does not have valid feature names", category=UserWarning
+            )
+            if self._supports_proba:
+                confidence = float(self._model.predict_proba(x)[0, 1])
+                pen_down = confidence >= self._down_threshold
+            else:
+                pen_down = bool(int(self._model.predict(x)[0]))
+                confidence = None
         return pen_down, confidence
 
     def reset(self) -> None:

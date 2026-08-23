@@ -131,6 +131,8 @@ class WhiteboardSession:
         side_up_px: float = DEFAULT_SIDE_UP_PX,
         ml_model_path: str | Path | None = DEFAULT_ML_MODEL_PATH,
         use_ml_pen_state: bool = False,
+        mirror: bool = False,
+        flip_vertical: bool = False,
     ) -> None:
         # 세션 시작 시 저장된 캘리브레이션을 1회 자동 로드한다. 없거나(최초 실행)
         # 손상됐으면 조용히 게이팅 없는 상태로 시작하고, 데모 루프가 `needs_calibration`을
@@ -192,6 +194,8 @@ class WhiteboardSession:
             side_up_px=side_up_px,
             ml_detector=ml_detector,
             use_ml_pen_state=use_ml_pen_state,
+            mirror=mirror,
+            flip_vertical=flip_vertical,
         )
         self._pen_down_thresh = pen_down_thresh
         self._pen_up_thresh = pen_up_thresh

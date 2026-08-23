@@ -96,7 +96,7 @@ def main() -> int:
         default=str(DEFAULT_ML_MODEL_PATH),
         metavar="PATH",
         help="D파트가 학습한 pen up/down ML 모델(joblib) 경로. 없거나 로드 실패해도 조용히 "
-             "휴리스틱만 사용 (기본 ml_results/logistic_regression.joblib)",
+             "휴리스틱만 사용 (기본 model/logistic_regression.joblib)",
     )
     parser.add_argument(
         "--no-pen-model",
@@ -144,6 +144,8 @@ def main() -> int:
             side_up_px=args.side_up_px,
             ml_model_path=None if args.no_pen_model else args.pen_model,
             use_ml_pen_state=args.use_ml_pen_state,
+            mirror=args.mirror,
+            flip_vertical=args.flip_vertical,
         ) as session:
             if args.debug_3d:
                 session.set_debug_3d(True)

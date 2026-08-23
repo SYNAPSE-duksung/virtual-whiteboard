@@ -171,6 +171,11 @@ class WhiteboardWindow(QMainWindow):
         if pen_model_path is not None:
             session_kwargs["ml_model_path"] = pen_model_path
         session_kwargs["use_ml_pen_state"] = use_ml_pen_state
+        # mirror/flip_vertical은 이미 프레임을 뒤집는 데 쓰고 있지만(_update_frame),
+        # ML 모델은 뒤집히지 않은 원본 좌표계로 학습됐으므로 세션에도 알려줘야
+        # core.PenTracker가 ML feature 계산 직전에만 이를 보정할 수 있다.
+        session_kwargs["mirror"] = mirror
+        session_kwargs["flip_vertical"] = flip_vertical
         # 3D 디버그 수치 패널은 영상 위에 굽지 않고 우측 Qt 라벨(self._debug3d_label)로
         # 따로 보여준다 — 화면이 커지면 텍스트 박스가 실제 손 위치를 덮어버리는 문제가 있었음.
         self._session = WhiteboardSession(render_3d_debug_inline=False, **session_kwargs)
@@ -648,7 +653,7 @@ def main() -> int:
         default=None,
         metavar="PATH",
         help="D파트가 학습한 pen up/down ML 모델(joblib) 경로 "
-             "(기본 ml_results/logistic_regression.joblib, 없으면 자동 비활성)",
+             "(기본 model/logistic_regression.joblib, 없으면 자동 비활성)",
     )
     parser.add_argument(
         "--use-ml-pen-state",

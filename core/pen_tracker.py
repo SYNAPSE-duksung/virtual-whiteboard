@@ -124,6 +124,8 @@ class PenTracker:
         side_up_px: float | None = None,
         ml_detector: MLPenStateDetector | None = None,
         use_ml_pen_state: bool = False,
+        mirror: bool = False,
+        flip_vertical: bool = False,
     ) -> None:
         self._tracker = HandTracker(
             max_num_hands=max_num_hands,
@@ -160,6 +162,12 @@ class PenTracker:
         # 위 두 신호처럼 lazy 생성이 필요 없다 — detector 유무·on/off 두 상태만 있으면 된다.
         self._ml_detector = ml_detector
         self._use_ml_pen_state = bool(use_ml_pen_state)
+        # 호출부가 화면 표시용으로 프레임을 미리 뒤집었는지(mirror/flip_vertical) —
+        # ML 모델은 뒤집히지 않은 원본 좌표계(D파트 학습 데이터 규약)로 학습됐으므로,
+        # ML feature 계산 직전에만 이 정보로 landmark를 되돌린다. 그리기·캘리브레이션·
+        # 3D·pen_ratio는 실제 화면과 일치해야 하므로 건드리지 않는다.
+        self._mirror = bool(mirror)
+        self._flip_vertical = bool(flip_vertical)
 
     # ------------------------------------------------------------------
     # 캘리브레이션 / 3D 접촉 추정기
@@ -420,13 +428,35 @@ class PenTracker:
             contact_source = "3d"
         elif self._use_ml_pen_state and self._ml_detector is not None:
             # ML은 side/3D처럼 자동 폴백이 아니라 수동 토글 — pen_ratio 자리에서만 경쟁한다.
-            ml_pen_down_signal, ml_confidence = self._ml_detector.update(landmarks)
-            instant_pen_down = ml_pen_down_signal
-            # 토글을 다시 끄거나 ML이 이번 프레임만 실패해도 어긋난 상태에서 시작하지
-            # 않도록 pen_ratio 히스테리시스도 계속 최신화한다.
-            self._pen_state.update(pen_ratio)
-            self._contact_detector.reset()
-            contact_source = "ml"
+            try:
+                lm_for_ml = landmarks
+                if self._mirror or self._flip_vertical:
+                    # 호출부가 화면 표시용으로 이미 뒤집은 프레임에서 나온 landmark를,
+                    # 학습 데이터와 같은 원본 좌표계로 되돌린다 (mirror는 x, flip_vertical은
+                    # y를 반사) — 그렇지 않으면 tip_y_wrist/tip_dx 등 방향성 feature의
+                    # 부호가 학습 때와 반대로 들어가 모델이 계속 틀린 방향으로 예측한다.
+                    lm_for_ml = landmarks.copy()
+                    if self._mirror:
+                        lm_for_ml[:, 0] = 1.0 - lm_for_ml[:, 0]
+                    if self._flip_vertical:
+                        lm_for_ml[:, 1] = 1.0 - lm_for_ml[:, 1]
+                ml_pen_down_signal, ml_confidence = self._ml_detector.update(lm_for_ml)
+                instant_pen_down = ml_pen_down_signal
+                contact_source = "ml"
+            except Exception:
+                # 모델 로드는 성공했지만(joblib.load 자체는 버전 불일치를 잡지 못함) 추론
+                # 시점에 scikit-learn 버전 불일치 등으로 실패하는 경우 — 매 프레임 재시도해
+                # 계속 죽는 대신 조용히 ML을 끄고 pen_ratio 폴백으로 넘어간다(3D 접촉
+                # 추정기 생성 실패 시의 조용한 폴백 관례, _set_calibration_internal과 동일).
+                self._ml_detector = None
+                instant_pen_down = self._pen_state.update(pen_ratio)
+                self._contact_detector.reset()
+                contact_source = "ratio"
+            else:
+                # 토글을 다시 끄거나 ML이 이번 프레임만 실패해도 어긋난 상태에서 시작하지
+                # 않도록 pen_ratio 히스테리시스도 계속 최신화한다.
+                self._pen_state.update(pen_ratio)
+                self._contact_detector.reset()
         else:
             instant_pen_down = self._pen_state.update(pen_ratio)
             self._contact_detector.reset()
